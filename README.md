@@ -13,9 +13,9 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/switcher.png" alt="WindowHop showing Finder, two Safari windows, Terminal, TextEdit, and Notes, including a minimized window" width="590" />
+  <a href="docs/images/switcher.png"><img src="docs/images/switcher.png" alt="WindowHop showing Finder, two Safari windows, Terminal, TextEdit, and Notes, including a minimized window" width="590" /></a>
 </p>
-<p align="center"><sub>The actual native picker, captured with example window titles for this preview.</sub></p>
+<p align="center"><sub>The native picker at 3× resolution, with example window titles. Click to view full size.</sub></p>
 
 ## Switch to the window you meant
 
@@ -59,6 +59,11 @@ WindowHop checks for permission changes automatically. Use **Check Again** or re
 
 **Command+Tab mode replaces the standard macOS app switcher while WindowHop is active.** Pause or quit WindowHop from its menu-bar menu to return to the system switcher. Option+Tab is the default and leaves the system's Command+Tab shortcut available.
 
+<p align="center">
+  <a href="docs/images/settings.png"><img src="docs/images/settings.png" alt="WindowHop Settings with Command+Tab selected, Accessibility enabled, and shortcut and window controls" width="510" /></a>
+</p>
+<p align="center"><sub>Settings at 3× resolution. Choose your shortcut and check Accessibility access. Click to view full size.</sub></p>
+
 ## Keyboard controls
 
 “Modifier” means **Option** or **Command**, according to your setting.
@@ -99,6 +104,7 @@ swift test                  # Selection, keyboard callback, and preference tests
 ./scripts/build.sh          # Build the .app and generate its native-symbol icon
 ./scripts/fixture.sh        # Open three disposable windows for manual testing
 ./scripts/preview.sh        # Show the documentation picker with example titles
+./scripts/preview.sh --export "$PWD/docs/images"  # Export both native views at 3×
 ```
 
 The documentation preview is a separate app that renders the production picker. It does not inspect your windows or install a keyboard tap.

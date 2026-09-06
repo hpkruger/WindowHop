@@ -21,4 +21,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 xattr -cr "$APP"
 codesign --force --sign - "$APP"
-open "$APP"
+if (( $# > 0 )); then
+  "$APP/Contents/MacOS/WindowHopPreview" "$@"
+else
+  open "$APP"
+fi
