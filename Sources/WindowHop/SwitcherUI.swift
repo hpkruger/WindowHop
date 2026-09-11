@@ -154,13 +154,16 @@ final class SwitcherPanel: NSPanel {
     func present(showPreviews: Bool) {
         let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
         let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 800)
-        // Keep the picker wide enough to feel like an app switcher while leaving
-        // a safe margin on small displays. The horizontal scroller handles large catalogs.
-        let maximumWidth = min(1800, max(320, area.width - 48))
-        let minimumWidth: CGFloat = showPreviews ? 980 : 780
-        let preferredWidth = max(minimumWidth, maximumWidth * 0.88)
-        let size = NSSize(width: min(preferredWidth, maximumWidth),
-                          height: min(showPreviews ? 330 : 216, area.height - 64))
+        let designSize = showPreviews ? NSSize(width: 1320, height: 330) : NSSize(width: 980, height: 216)
+        let aspectRatio = designSize.width / designSize.height
+        var width = area.width * 0.80
+        var height = width / aspectRatio
+        let maximumHeight = max(160, area.height - 64)
+        if height > maximumHeight {
+            height = maximumHeight
+            width = height * aspectRatio
+        }
+        let size = NSSize(width: width, height: height)
         setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2, width: size.width, height: size.height), display: true)
         orderFrontRegardless()
     }
