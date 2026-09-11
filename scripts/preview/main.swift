@@ -37,7 +37,7 @@ final class PreviewDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 do {
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    try self.export(SwitcherView(model: self.model).frame(width: 1120, height: 270),
+                    try self.export(SwitcherView(model: self.model).frame(width: 1320, height: 330),
                                     to: folder.appendingPathComponent("switcher.png"))
                     let settings = SetupModel()
                     settings.shortcut = .command

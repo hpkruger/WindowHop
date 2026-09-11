@@ -239,8 +239,8 @@ final class WindowCatalog {
                 $0.owningApplication?.processID ?? 0
             }
             let configuration = SCStreamConfiguration()
-            configuration.width = 356
-            configuration.height = 208
+            configuration.width = 448
+            configuration.height = 296
             configuration.scalesToFit = true
             configuration.preservesAspectRatio = true
             configuration.showsCursor = false

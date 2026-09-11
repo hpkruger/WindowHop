@@ -40,7 +40,7 @@ struct SwitcherView: View {
                             Button { model.choose?(window.id) } label: {
                                 WindowCard(window: window, preview: model.previews[window.id],
                                            selected: model.selected == window.id, showPreview: model.showPreviews)
-                                    .frame(width: model.showPreviews ? 178 : 154)
+                                    .frame(width: model.showPreviews ? 224 : 184)
                                     .padding(9)
                                     .background(model.selected == window.id ? Color.cyan.opacity(0.16) : Color.white.opacity(0.035))
                                     .clipShape(RoundedRectangle(cornerRadius: 13))
@@ -53,7 +53,7 @@ struct SwitcherView: View {
                         }
                     }.padding(2)
                 }
-                .frame(height: model.showPreviews ? 174 : 92)
+                .frame(height: model.showPreviews ? 220 : 106)
                 .onChange(of: model.selected) { id in if let id { proxy.scrollTo(id, anchor: .center) } }
                 .onAppear { if let id = model.selected { proxy.scrollTo(id, anchor: .center) } }
             }
@@ -103,7 +103,7 @@ private struct WindowCard: View {
                             .clipShape(Capsule())
                     }
                 }
-                .frame(height: 104)
+                .frame(height: 148)
                 .background(Color.white.opacity(0.06))
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .clipped()
@@ -113,7 +113,7 @@ private struct WindowCard: View {
                     Image(systemName: window.minimized || window.hidden ? "eye.slash" : "rectangle")
                         .font(.system(size: 12)).foregroundStyle(.secondary)
                 }
-                .frame(height: 38)
+                .frame(height: 48)
             }
 
             HStack(spacing: 7) {
@@ -156,10 +156,11 @@ final class SwitcherPanel: NSPanel {
         let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 800)
         // Keep the picker wide enough to feel like an app switcher while leaving
         // a safe margin on small displays. The horizontal scroller handles large catalogs.
-        let maximumWidth = min(1600, max(320, area.width - 64))
-        let minimumWidth: CGFloat = showPreviews ? 820 : 700
-        let preferredWidth = max(minimumWidth, maximumWidth * 0.80)
-        let size = NSSize(width: min(preferredWidth, maximumWidth), height: min(showPreviews ? 270 : 184, area.height - 80))
+        let maximumWidth = min(1800, max(320, area.width - 48))
+        let minimumWidth: CGFloat = showPreviews ? 980 : 780
+        let preferredWidth = max(minimumWidth, maximumWidth * 0.88)
+        let size = NSSize(width: min(preferredWidth, maximumWidth),
+                          height: min(showPreviews ? 330 : 216, area.height - 64))
         setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2, width: size.width, height: size.height), display: true)
         orderFrontRegardless()
     }
