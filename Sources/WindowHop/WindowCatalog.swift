@@ -22,6 +22,7 @@ struct WindowRecord: Identifiable {
 /// All AX calls run on this serial queue, never in the keyboard callback or UI thread.
 final class WindowCatalog {
     private let queue = DispatchQueue(label: "WindowHop.accessibility", qos: .userInitiated)
+    private let reconciliationInterval: DispatchTimeInterval = .seconds(5)
     private var records: [WindowRecord] = []
     private var serial: UInt64 = 0
     private var lastFocus: UUID?
@@ -34,8 +35,12 @@ final class WindowCatalog {
     func start() {
         guard timer == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now(), repeating: 1)
-        timer.setEventHandler { [weak self] in self?.refresh() }
+        // Accessibility calls can block while an app is busy. A one-second full
+        // scan keeps every process hot even when nothing on the desktop changes.
+        // Notifications still request an immediate reconciliation for interactive
+        // changes; this timer is only the periodic safety net.
+        timer.schedule(deadline: .now(), repeating: reconciliationInterval, leeway: .milliseconds(500))
+        timer.setEventHandler { [weak self] in self?.requestRefresh() }
         self.timer = timer
         timer.resume()
     }
@@ -69,6 +74,11 @@ final class WindowCatalog {
         }
         var next: [WindowRecord] = []
         var current: UUID?
+        var oldRecordsByElement: [CFHashCode: [WindowRecord]] = [:]
+        for record in records {
+            oldRecordsByElement[CFHash(record.element), default: []].append(record)
+        }
+        var iconCache: [pid_t: NSImage] = [:]
         let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         for app in apps {
             let pid = app.processIdentifier
@@ -77,19 +87,21 @@ final class WindowCatalog {
             observe(pid: pid, application: application)
             let windows: [AXUIElement] = axValue(application, kAXWindowsAttribute) ?? []
             let focused: AXUIElement? = pid == frontPID ? axValue(application, kAXFocusedWindowAttribute) : nil
+            let icon = iconCache[pid] ?? app.icon
+            if let icon { iconCache[pid] = icon }
             for window in windows {
                 AXUIElementSetMessagingTimeout(window, 0.15)
                 let role: String = axValue(window, kAXRoleAttribute) ?? ""
                 let subrole: String = axValue(window, kAXSubroleAttribute) ?? ""
                 guard role == kAXWindowRole,
                       subrole == kAXStandardWindowSubrole || subrole == kAXDialogSubrole else { continue }
-                let old = records.first { $0.pid == pid && CFEqual($0.element, window) }
+                let old = oldRecordsByElement[CFHash(window)]?.first { CFEqual($0.element, window) }
                 let id = old?.id ?? UUID()
                 let title: String = axValue(window, kAXTitleAttribute) ?? ""
                 var record = WindowRecord(id: id, pid: pid, element: window,
                     appName: app.localizedName ?? "App", title: title.isEmpty ? "Untitled window" : title,
                     minimized: axValue(window, kAXMinimizedAttribute) ?? false,
-                    hidden: app.isHidden, icon: app.icon, lastUsed: old?.lastUsed ?? 0)
+                    hidden: app.isHidden, icon: icon, lastUsed: old?.lastUsed ?? 0)
                 if let focused, CFEqual(focused, window) {
                     current = id
                     if lastFocus != id { serial += 1; record.lastUsed = serial }
@@ -97,15 +109,28 @@ final class WindowCatalog {
                 next.append(record)
             }
         }
+        let focusChanged = current != lastFocus
         lastFocus = current
-        records = next.sorted {
+        let sorted = next.sorted {
             if $0.lastUsed != $1.lastUsed { return $0.lastUsed > $1.lastUsed }
             let lhs = $0.appName + $0.title
             let rhs = $1.appName + $1.title
             return lhs == rhs ? $0.id.uuidString < $1.id.uuidString : lhs < rhs
         }
+        let changed = focusChanged || !sameCatalog(records, sorted)
+        records = sorted
         let result = records
+        guard changed else { return }
         DispatchQueue.main.async { self.onUpdate?(result, current) }
+    }
+
+    private func sameCatalog(_ lhs: [WindowRecord], _ rhs: [WindowRecord]) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        return zip(lhs, rhs).allSatisfy { left, right in
+            left.id == right.id && left.pid == right.pid &&
+            left.appName == right.appName && left.title == right.title &&
+            left.minimized == right.minimized && left.hidden == right.hidden
+        }
     }
 
     private func observe(pid: pid_t, application: AXUIElement) {
