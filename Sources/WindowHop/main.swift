@@ -2,6 +2,12 @@ import AppKit
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private struct CachedPreview {
+        let image: NSImage
+        let title: String
+        let capturedAt: Date
+    }
+
     let catalog = WindowCatalog()
     let keyboard = KeyboardTap()
     let model = SwitcherModel()
@@ -15,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var permissionTimer: Timer?
     var paused = false
     var fixtureWindows: [NSWindow] = []
+    private var previewCache: [UUID: CachedPreview] = [:]
+    private let previewCacheLifetime: TimeInterval = 10
+    private let previewCacheLimit = 24
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--fixture") { launchFixture(); return }
@@ -36,6 +45,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         catalog.onUpdate = { [weak self] records, current in
             guard let self else { return }
             self.windows = records; self.current = current; self.setup.count = records.count
+            let liveIDs = Set(records.map(\.id))
+            self.previewCache = self.previewCache.filter { liveIDs.contains($0.key) }
+        }
+        catalog.onPreviews = { [weak self] previews in
+            guard let self, self.setup.showPreviews else { return }
+            let capturedAt = Date()
+            for (id, image) in previews {
+                guard let window = self.model.windows.first(where: { $0.id == id }) else { continue }
+                self.previewCache[id] = CachedPreview(image: image, title: window.title, capturedAt: capturedAt)
+            }
+            self.trimPreviewCache()
+            self.model.previews.merge(previews) { _, latest in latest }
         }
         keyboard.onStep = { [weak self] backwards in self?.step(backwards: backwards) ?? false }
         keyboard.onCommit = { [weak self] in self?.commit() }
@@ -61,6 +82,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             shortcut.save()
             self.checkPermissions()
         }
+        setup.previewsChanged = { [weak self] enabled in
+            guard let self else { return }
+            WindowPreviewPreference.save(enabled)
+            self.model.showPreviews = enabled
+            self.model.previews.removeAll()
+            if !enabled {
+                self.previewCache.removeAll()
+                self.catalog.cancelPreviewRequests()
+            }
+        }
+        setup.openScreenRecordingSettings = {
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+                NSWorkspace.shared.open(url)
+            }
+        }
         setup.preview = { [weak self] in self?.preview() }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(workspaceChanged),
             name: NSWorkspace.didActivateApplicationNotification, object: nil)
@@ -85,13 +121,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func step(backwards: Bool) -> Bool {
+        var startedSession = false
         if session == nil {
             guard !windows.isEmpty else { return false }
             model.windows = windows
+            model.previews = model.showPreviews ? cachedPreviews(for: windows) : [:]
             session = SwitchSession(ids: windows.map(\.id), current: current, backwards: backwards)
+            startedSession = true
         } else { session?.step(backwards: backwards) }
         model.selected = session?.selected
-        panel.present(count: model.windows.count)
+        panel.present(showPreviews: model.showPreviews)
+        if model.showPreviews && startedSession {
+            catalog.requestPreviews(for: model.windows, selected: model.selected,
+                                    excluding: Set(model.previews.keys))
+        }
         return true
     }
 
@@ -104,7 +147,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func dismiss() { keyboard.endGesture(); session = nil; panel?.orderOut(nil) }
+    func dismiss() {
+        keyboard.endGesture()
+        catalog.cancelPreviewRequests()
+        session = nil
+        panel?.orderOut(nil)
+        model.previews.removeAll()
+    }
     @objc func workspaceChanged() { keyboard.cancel(); catalog.requestRefresh() }
     @objc func lockOrSleep() { keyboard.cancel() }
     @objc func preview() {
@@ -136,6 +185,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !CommandLine.arguments.contains("--fixture"), panel?.isVisible != true { showSetup() }
         return true
+    }
+
+    private func cachedPreviews(for windows: [WindowRecord]) -> [UUID: NSImage] {
+        let cutoff = Date().addingTimeInterval(-previewCacheLifetime)
+        let titles = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0.title) })
+        previewCache = previewCache.filter { id, entry in
+            entry.capturedAt >= cutoff && titles[id] == entry.title
+        }
+        return previewCache.mapValues(\.image)
+    }
+
+    private func trimPreviewCache() {
+        guard previewCache.count > previewCacheLimit else { return }
+        let excess = previewCache.count - previewCacheLimit
+        for id in previewCache.sorted(by: { $0.value.capturedAt < $1.value.capturedAt }).prefix(excess).map(\.key) {
+            previewCache.removeValue(forKey: id)
+        }
     }
 
     private func launchFixture() {

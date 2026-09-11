@@ -25,7 +25,8 @@ WindowHop puts individual windows in a single picker. Two Safari windows get two
 
 ## What it does
 
-- **Switch between windows across apps.** See each window's title and app icon.
+- **Switch between windows across apps.** See each window's title and app icon in a horizontal Alt-Tab-style picker.
+- **Preview windows at a glance.** Live thumbnails are enabled by default and can be turned off in Settings for a compact picker.
 - **Choose Option+Tab or Command+Tab.** Change the shortcut in Settings; your choice survives restarts.
 - **Restore minimized windows.** Selecting a window unhides its app and restores the window before raising it.
 - **Return to recent windows.** WindowHop tracks focus while running and keeps the order steady while you cycle.
@@ -82,9 +83,9 @@ The picker opens on the display containing your pointer. You can also open it wi
 
 ## Permissions and privacy
 
-WindowHop needs **Accessibility** access to read window titles, handle its shortcut, and focus or restore windows.
+WindowHop needs **Accessibility** access to read window titles, handle its shortcut, and focus or restore windows. Live window previews also use macOS **Screen Recording** access; if that permission is unavailable, the picker continues to show titles and icons.
 
-It does **not** request Screen Recording permission, capture thumbnails, record keystrokes, send network requests, or save window-title history. The picker uses app icons and text; recent-window history stays in memory.
+WindowHop does not save preview images or record keystrokes, send network requests, or save window-title history. Recent-window history stays in memory. Turn previews off in Settings if you do not want it to use Screen Recording access.
 
 ## Good to know
 

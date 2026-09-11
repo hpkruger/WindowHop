@@ -1,70 +1,138 @@
 import AppKit
 import SwiftUI
 
+enum WindowPreviewPreference {
+    static let key = "showWindowPreviews"
+
+    static func load(from defaults: UserDefaults = .standard) -> Bool {
+        defaults.object(forKey: key) as? Bool ?? true
+    }
+
+    static func save(_ enabled: Bool, to defaults: UserDefaults = .standard) {
+        defaults.set(enabled, forKey: key)
+    }
+}
+
 final class SwitcherModel: ObservableObject {
     @Published var windows: [WindowRecord] = []
     @Published var selected: UUID?
     @Published var shortcut: SwitcherShortcut = .option
+    @Published var previews: [UUID: NSImage] = [:]
+    @Published var showPreviews = WindowPreviewPreference.load()
     var choose: ((UUID) -> Void)?
 }
 
 struct SwitcherView: View {
     @ObservedObject var model: SwitcherModel
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Image(systemName: "rectangle.on.rectangle").foregroundStyle(.cyan)
                 Text("WindowHop").font(.system(size: 17, weight: .semibold))
                 Spacer()
                 Text("\(model.windows.count) windows").foregroundStyle(.secondary)
-            }.padding(.horizontal, 8)
+            }.padding(.horizontal, 6)
             ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 6) {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 10) {
                         ForEach(model.windows) { window in
                             Button { model.choose?(window.id) } label: {
-                                HStack(spacing: 14) {
-                                    if let icon = window.icon {
-                                        Image(nsImage: icon).resizable().frame(width: 40, height: 40)
-                                    }
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(window.title).font(.system(size: 14, weight: .medium)).lineLimit(1)
-                                        Text(window.appName).font(.system(size: 12)).foregroundStyle(.secondary)
-                                    }
-                                    Spacer(minLength: 4)
-                                    if window.minimized || window.hidden {
-                                        Text(window.minimized ? "Minimized" : "Hidden")
-                                            .font(.system(size: 11)).foregroundStyle(.secondary)
-                                    }
-                                    if model.selected == window.id {
-                                        Image(systemName: "return").foregroundStyle(.cyan)
-                                    }
-                                }
-                                .padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(model.selected == window.id ? Color.cyan.opacity(0.16) : Color.white.opacity(0.035))
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(model.selected == window.id ? Color.cyan.opacity(0.6) : .clear))
-                                .contentShape(Rectangle())
+                                WindowCard(window: window, preview: model.previews[window.id],
+                                           selected: model.selected == window.id, showPreview: model.showPreviews)
+                                    .frame(width: model.showPreviews ? 178 : 154)
+                                    .padding(9)
+                                    .background(model.selected == window.id ? Color.cyan.opacity(0.16) : Color.white.opacity(0.035))
+                                    .clipShape(RoundedRectangle(cornerRadius: 13))
+                                    .overlay(RoundedRectangle(cornerRadius: 13)
+                                        .stroke(model.selected == window.id ? Color.cyan.opacity(0.75) : Color.white.opacity(0.08), lineWidth: 1))
+                                    .contentShape(Rectangle())
                             }.buttonStyle(.plain).id(window.id)
                             .accessibilityLabel("\(window.appName), \(window.title)\(window.minimized ? ", minimized" : "")")
                             .accessibilityAddTraits(model.selected == window.id ? .isSelected : [])
                         }
                     }.padding(2)
                 }
+                .frame(height: model.showPreviews ? 174 : 92)
                 .onChange(of: model.selected) { id in if let id { proxy.scrollTo(id, anchor: .center) } }
                 .onAppear { if let id = model.selected { proxy.scrollTo(id, anchor: .center) } }
             }
             HStack {
                 Text("\(model.shortcut.symbol) Tab  Next"); Text("⇧  Reverse")
                 Spacer()
+                if model.showPreviews {
+                    Text("Previews on").foregroundStyle(.secondary)
+                }
                 Text("Release \(model.shortcut.symbol) to switch").foregroundStyle(.primary)
-            }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 8)
+            }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 6)
         }
         .padding(20)
         .background(Color(nsColor: NSColor(calibratedWhite: 0.085, alpha: 0.98)))
         .clipShape(RoundedRectangle(cornerRadius: 22))
         .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.white.opacity(0.12)))
         .environment(\.colorScheme, .dark)
+    }
+}
+
+private struct WindowCard: View {
+    let window: WindowRecord
+    let preview: NSImage?
+    let selected: Bool
+    let showPreview: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showPreview {
+                ZStack(alignment: .bottomLeading) {
+                    if let preview {
+                        Image(nsImage: preview)
+                            .resizable().aspectRatio(contentMode: .fill)
+                    } else {
+                        VStack(spacing: 5) {
+                            Image(systemName: window.minimized || window.hidden ? "eye.slash" : "rectangle.on.rectangle")
+                                .font(.system(size: 24)).foregroundStyle(.secondary)
+                            Text(window.minimized || window.hidden ? "No live preview" : "Preview unavailable")
+                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                    if window.minimized || window.hidden {
+                        Text(window.minimized ? "Minimized" : "Hidden")
+                            .font(.system(size: 10, weight: .medium))
+                            .padding(.horizontal, 6).padding(.vertical, 3)
+                            .background(.black.opacity(0.68))
+                            .clipShape(Capsule())
+                    }
+                }
+                .frame(height: 104)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipped()
+            } else {
+                HStack(spacing: 8) {
+                    appIcon
+                    Image(systemName: window.minimized || window.hidden ? "eye.slash" : "rectangle")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                .frame(height: 38)
+            }
+
+            HStack(spacing: 7) {
+                if showPreview { appIcon }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(window.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                    Text(window.appName).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    @ViewBuilder private var appIcon: some View {
+        if let icon = window.icon {
+            Image(nsImage: icon).resizable().frame(width: 25, height: 25)
+        } else {
+            Image(systemName: "app.dashed").frame(width: 25, height: 25).foregroundStyle(.secondary)
+        }
     }
 }
 
@@ -83,10 +151,15 @@ final class SwitcherPanel: NSPanel {
         contentView = NSHostingView(rootView: SwitcherView(model: model))
     }
 
-    func present(count: Int) {
+    func present(showPreviews: Bool) {
         let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
         let area = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1000, height: 800)
-        let size = NSSize(width: min(590, area.width - 40), height: min(CGFloat(count * 76 + 112), area.height - 80, 650))
+        // Keep the picker wide enough to feel like an app switcher while leaving
+        // a safe margin on small displays. The horizontal scroller handles large catalogs.
+        let maximumWidth = min(1600, max(320, area.width - 64))
+        let minimumWidth: CGFloat = showPreviews ? 820 : 700
+        let preferredWidth = max(minimumWidth, maximumWidth * 0.80)
+        let size = NSSize(width: min(preferredWidth, maximumWidth), height: min(showPreviews ? 270 : 184, area.height - 80))
         setFrame(NSRect(x: area.midX - size.width / 2, y: area.midY - size.height / 2, width: size.width, height: size.height), display: true)
         orderFrontRegardless()
     }
@@ -94,12 +167,15 @@ final class SwitcherPanel: NSPanel {
 
 final class SetupModel: ObservableObject {
     @Published var shortcut = SwitcherShortcut.load()
+    @Published var showPreviews = WindowPreviewPreference.load()
     var shortcutChanged: ((SwitcherShortcut) -> Void)?
+    var previewsChanged: ((Bool) -> Void)?
     @Published var trusted = false
     @Published var keyboardReady = false
     @Published var count = 0
     @Published var message = ""
     var openSettings: (() -> Void)?
+    var openScreenRecordingSettings: (() -> Void)?
     var retry: (() -> Void)?
     var preview: (() -> Void)?
 }
@@ -128,12 +204,20 @@ struct SetupView: View {
                     .font(.system(size: 12)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Show window previews", isOn: $model.showPreviews)
+                    .onChange(of: model.showPreviews) { model.previewsChanged?($0) }
+                Text("Shows a live thumbnail for each visible window in the horizontal switcher. Turn this off for a compact title-and-icon view.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Open Screen Recording Settings") { model.openScreenRecordingSettings?() }
+            }
             VStack(alignment: .leading, spacing: 12) {
                 Label(model.trusted ? "Accessibility enabled" : "Enable Accessibility to find and focus windows",
                       systemImage: model.trusted ? "checkmark.circle.fill" : "lock.shield")
                 Label(model.keyboardReady ? "\(model.shortcut.title) is ready" : "Keyboard shortcut is waiting for permission",
                       systemImage: model.keyboardReady ? "checkmark.circle.fill" : "keyboard")
-                Text("WindowHop reads window titles and keyboard shortcuts locally. It does not record your screen or save keystrokes.")
+                Text("WindowHop reads window titles and keyboard shortcuts locally. When previews are enabled, macOS provides thumbnails of visible windows; WindowHop does not save them or record keystrokes.")
                     .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.primary.opacity(0.045)).clipShape(RoundedRectangle(cornerRadius: 12))

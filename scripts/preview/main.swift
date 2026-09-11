@@ -23,17 +23,21 @@ final class PreviewDelegate: NSObject, NSApplicationDelegate {
             return WindowRecord(id: UUID(), pid: getpid(), element: AXUIElementCreateApplication(getpid()),
                 appName: app, title: title, minimized: minimized, hidden: false, icon: icon, lastUsed: 0)
         }
+        model.previews = Dictionary(uniqueKeysWithValues: model.windows.enumerated().map { index, window in
+            (window.id, samplePreview(index: index, appName: window.appName, title: window.title))
+        })
         model.shortcut = .command
         model.selected = model.windows[1].id
+        model.showPreviews = true
         panel = SwitcherPanel(model: model)
-        panel.present(count: model.windows.count)
+        panel.present(showPreviews: model.showPreviews)
         if let index = CommandLine.arguments.firstIndex(of: "--export"),
            CommandLine.arguments.indices.contains(index + 1) {
             let folder = URL(fileURLWithPath: CommandLine.arguments[index + 1], isDirectory: true)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 do {
                     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-                    try self.export(SwitcherView(model: self.model).frame(width: 590, height: 568),
+                    try self.export(SwitcherView(model: self.model).frame(width: 1120, height: 270),
                                     to: folder.appendingPathComponent("switcher.png"))
                     let settings = SetupModel()
                     settings.shortcut = .command
@@ -51,6 +55,22 @@ final class PreviewDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         }
+    }
+
+    private func samplePreview(index: Int, appName: String, title: String) -> NSImage {
+        let image = NSImage(size: NSSize(width: 320, height: 180))
+        image.lockFocus()
+        let colors: [NSColor] = [.systemBlue, .systemIndigo, .systemTeal, .systemOrange, .systemPurple, .systemPink]
+        colors[index % colors.count].withAlphaComponent(0.72).setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: 320, height: 180)).fill()
+        NSColor.black.withAlphaComponent(0.38).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 18, y: 24, width: 284, height: 132), xRadius: 10, yRadius: 10).fill()
+        let heading = "  \(appName)"
+        let detail = title
+        heading.draw(at: NSPoint(x: 32, y: 126), withAttributes: [.font: NSFont.systemFont(ofSize: 16, weight: .semibold), .foregroundColor: NSColor.white])
+        detail.draw(at: NSPoint(x: 32, y: 88), withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.white.withAlphaComponent(0.78)])
+        image.unlockFocus()
+        return image
     }
 
     @MainActor private func export<V: View>(_ view: V, to url: URL) throws {

@@ -3,7 +3,9 @@ set -euo pipefail
 cd "${0:A:h:h}"
 APP="$PWD/build/WindowHop Preview.app"
 mkdir -p "$APP/Contents/MacOS"
-swiftc -swift-version 5 -O \
+# Keep the helper's deployment target aligned with Package.swift. This also
+# allows the legacy CoreGraphics window-snapshot API on macOS 13–14.
+swiftc -swift-version 5 -target "$(uname -m)-apple-macosx13.0" -O \
   Sources/WindowHop/KeyboardTap.swift \
   Sources/WindowHop/WindowCatalog.swift \
   Sources/WindowHop/SwitcherUI.swift \
@@ -20,6 +22,11 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict></plist>
 PLIST
 xattr -cr "$APP"
+# Documents folders can add bundle-level Finder/FileProvider metadata after the
+# recursive clear; remove it explicitly before ad-hoc signing.
+xattr -c "$APP" 2>/dev/null || true
+xattr -d com.apple.FinderInfo "$APP" 2>/dev/null || true
+xattr -d 'com.apple.fileprovider.fpfs#P' "$APP" 2>/dev/null || true
 codesign --force --sign - "$APP"
 if (( $# > 0 )); then
   "$APP/Contents/MacOS/WindowHopPreview" "$@"

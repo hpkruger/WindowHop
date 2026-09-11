@@ -48,6 +48,17 @@ final class KeyboardTapTests: XCTestCase {
         XCTAssertEqual(SwitcherShortcut.load(from: defaults), .option)
     }
 
+    func testWindowPreviewPreferenceDefaultsOnAndPersists() {
+        let name = "WindowHopPreviewTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defer { defaults.removePersistentDomain(forName: name) }
+        XCTAssertTrue(WindowPreviewPreference.load(from: defaults))
+        WindowPreviewPreference.save(false, to: defaults)
+        XCTAssertFalse(WindowPreviewPreference.load(from: defaults))
+        WindowPreviewPreference.save(true, to: defaults)
+        XCTAssertTrue(WindowPreviewPreference.load(from: defaults))
+    }
+
     // Exercise the production callback without posting events to the user's desktop.
     private func event(_ key: CGKeyCode = 48, flags: CGEventFlags = .maskAlternate) -> CGEvent {
         let event = CGEvent(keyboardEventSource: nil, virtualKey: key, keyDown: true)!
