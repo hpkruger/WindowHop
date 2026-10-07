@@ -18,6 +18,8 @@ struct WindowRecord: Identifiable {
     let hidden: Bool
     let icon: NSImage?
     var lastUsed: UInt64
+    var windowNumber: CGWindowID?
+    var onScreen: Bool?
 
     init(id: UUID, pid: pid_t, element: AXUIElement,
          appName: String, title: String, minimized: Bool, hidden: Bool,
@@ -34,14 +36,12 @@ struct WindowRecord: Identifiable {
     }
 }
 
-/// All AX calls run on this serial queue, never in the keyboard callback or UI thread.
+/// Discovery runs independently of focus tracking and activation.
 final class WindowCatalog {
     private let queue = DispatchQueue(label: "WindowHop.accessibility", qos: .userInitiated)
     private let previewQueue = DispatchQueue(label: "WindowHop.previews", qos: .userInitiated)
     private let reconciliationInterval: DispatchTimeInterval = .seconds(5)
     private var records: [WindowRecord] = []
-    private var serial: UInt64 = 0
-    private var lastFocus: UUID?
     private var observers: [pid_t: AXObserver] = [:]
     private var timer: DispatchSourceTimer?
     private let refreshLock = NSLock()
@@ -50,7 +50,8 @@ final class WindowCatalog {
     private var refreshAgain = false
     private var iconCache: [pid_t: NSImage] = [:]
     private var previewRequestNumber: UInt64 = 0
-    var onUpdate: (([WindowRecord], UUID?) -> Void)?
+    var onUpdate: (([WindowRecord]) -> Void)?
+    var onFocusEvent: ((AXUIElement, pid_t) -> Void)?
     var onPreviews: (([UUID: NSImage]) -> Void)?
 
     func start() {
@@ -93,7 +94,7 @@ final class WindowCatalog {
 
     private func refresh() {
         guard AXIsProcessTrusted() else {
-            DispatchQueue.main.async { self.onUpdate?([], nil) }
+            DispatchQueue.main.async { self.onUpdate?([]) }
             return
         }
         let apps = NSWorkspace.shared.runningApplications.filter {
@@ -107,27 +108,32 @@ final class WindowCatalog {
             }
         }
         var next: [WindowRecord] = []
-        var current: UUID?
+        let snapshot = WindowServerSnapshot.capture()
         var oldRecordsByElement: [CFHashCode: [WindowRecord]] = [:]
         for record in records {
             oldRecordsByElement[CFHash(record.element), default: []].append(record)
         }
-        let frontPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
         for app in apps {
             let pid = app.processIdentifier
             let application = AXUIElementCreateApplication(pid)
             AXUIElementSetMessagingTimeout(application, 0.15)
             observe(pid: pid, application: application)
-            let windows: [AXUIElement] = axValue(application, kAXWindowsAttribute) ?? []
-            let focused: AXUIElement? = pid == frontPID ? axValue(application, kAXFocusedWindowAttribute) : nil
+            guard let windows: [AXUIElement] = axValue(application, kAXWindowsAttribute) else {
+                // A transient AX timeout is not evidence that every window has closed.
+                next.append(contentsOf: records.filter { $0.pid == pid })
+                continue
+            }
             let icon = iconCache[pid] ?? app.icon
             if let icon { iconCache[pid] = icon }
             for window in windows {
                 AXUIElementSetMessagingTimeout(window, 0.15)
-                guard let attributes = windowAttributes(window),
-                      attributes.role == kAXWindowRole,
-                      attributes.subrole == kAXStandardWindowSubrole || attributes.subrole == kAXDialogSubrole else { continue }
                 let old = oldRecordsByElement[CFHash(window)]?.first { CFEqual($0.element, window) }
+                guard let attributes = windowAttributes(window), !attributes.role.isEmpty else {
+                    if let old { next.append(old) }
+                    continue
+                }
+                guard attributes.role == kAXWindowRole,
+                      attributes.subrole == kAXStandardWindowSubrole || attributes.subrole == kAXDialogSubrole else { continue }
                 let id = old?.id ?? UUID()
                 let title = attributes.title
                 let displayTitle = title.isEmpty ? "Untitled window" : title
@@ -135,35 +141,32 @@ final class WindowCatalog {
                     appName: app.localizedName ?? "App", title: displayTitle,
                     minimized: attributes.minimized,
                     hidden: app.isHidden, icon: icon, lastUsed: old?.lastUsed ?? 0)
-                if let focused, CFEqual(focused, window) {
-                    current = id
-                    if lastFocus != id { serial += 1; record.lastUsed = serial }
-                }
+                let serverWindow = snapshot.match(pid: pid, title: title, bounds: windowBounds(window),
+                                                  previousNumber: old?.windowNumber)
+                record.windowNumber = serverWindow?.number
+                record.onScreen = serverWindow?.onScreen
                 next.append(record)
             }
         }
-        let focusChanged = current != lastFocus
-        lastFocus = current
-        let sorted = next.sorted {
-            if $0.lastUsed != $1.lastUsed { return $0.lastUsed > $1.lastUsed }
-            let lhs = $0.appName + $0.title
-            let rhs = $1.appName + $1.title
-            return lhs == rhs ? $0.id.uuidString < $1.id.uuidString : lhs < rhs
+        let ranks = Dictionary(uniqueKeysWithValues: snapshot.entries.enumerated().map { ($0.element.number, $0.offset) })
+        let previousRanks = Dictionary(uniqueKeysWithValues: records.enumerated().map { ($0.element.id, $0.offset) })
+        records = next.sorted {
+            let lhs = $0.windowNumber.flatMap { ranks[$0] } ?? Int.max
+            let rhs = $1.windowNumber.flatMap { ranks[$0] } ?? Int.max
+            if lhs != rhs { return lhs < rhs }
+            return (previousRanks[$0.id] ?? Int.max) < (previousRanks[$1.id] ?? Int.max)
         }
-        let changed = focusChanged || !sameCatalog(records, sorted)
-        records = sorted
         let result = records
-        guard changed else { return }
-        DispatchQueue.main.async { self.onUpdate?(result, current) }
+        DispatchQueue.main.async { self.onUpdate?(result) }
     }
 
-    private func sameCatalog(_ lhs: [WindowRecord], _ rhs: [WindowRecord]) -> Bool {
-        guard lhs.count == rhs.count else { return false }
-        return zip(lhs, rhs).allSatisfy { left, right in
-            left.id == right.id && left.pid == right.pid &&
-            left.appName == right.appName && left.title == right.title &&
-            left.minimized == right.minimized && left.hidden == right.hidden
-        }
+    private func windowBounds(_ element: AXUIElement) -> CGRect? {
+        guard let position: AXValue = axValue(element, kAXPositionAttribute),
+              let size: AXValue = axValue(element, kAXSizeAttribute) else { return nil }
+        var point = CGPoint.zero
+        var dimensions = CGSize.zero
+        guard AXValueGetValue(position, .cgPoint, &point), AXValueGetValue(size, .cgSize, &dimensions) else { return nil }
+        return CGRect(origin: point, size: dimensions)
     }
 
     private func windowAttributes(_ element: AXUIElement) -> (role: String, subrole: String, title: String, minimized: Bool)? {
@@ -333,9 +336,16 @@ final class WindowCatalog {
     private func observe(pid: pid_t, application: AXUIElement) {
         guard observers[pid] == nil else { return }
         var observer: AXObserver?
-        let callback: AXObserverCallback = { _, _, _, context in
+        let callback: AXObserverCallback = { _, element, notification, context in
             guard let context else { return }
-            Unmanaged<WindowCatalog>.fromOpaque(context).takeUnretainedValue().requestRefresh()
+            let catalog = Unmanaged<WindowCatalog>.fromOpaque(context).takeUnretainedValue()
+            if notification as String == kAXFocusedWindowChangedNotification || notification as String == kAXApplicationActivatedNotification {
+                var pid: pid_t = 0
+                AXUIElementGetPid(element, &pid)
+                catalog.onFocusEvent?(element, pid)
+            } else {
+                catalog.requestRefresh()
+            }
         }
         guard AXObserverCreate(pid, callback, &observer) == .success, let observer else { return }
         for notification in [kAXFocusedWindowChangedNotification, kAXWindowCreatedNotification,
@@ -347,31 +357,4 @@ final class WindowCatalog {
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
     }
 
-    func activate(_ record: WindowRecord, completion: @escaping (String?) -> Void) {
-        queue.async {
-            guard let app = NSRunningApplication(processIdentifier: record.pid), !app.isTerminated else {
-                DispatchQueue.main.async { completion("That app has closed.") }; return
-            }
-            let minimized: Bool = axValue(record.element, kAXMinimizedAttribute) ?? false
-            if minimized {
-                let error = AXUIElementSetAttributeValue(record.element, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
-                guard error == .success else {
-                    DispatchQueue.main.async { completion("macOS could not restore this window (\(error.rawValue)).") }; return
-                }
-            }
-            DispatchQueue.main.async {
-                app.unhide()
-                app.activate(options: [.activateIgnoringOtherApps])
-                // Give app activation and any Space transition a chance to begin before raising.
-                self.queue.asyncAfter(deadline: .now() + 0.12) {
-                    AXUIElementSetAttributeValue(record.element, kAXMainAttribute as CFString, kCFBooleanTrue)
-                    let result = AXUIElementPerformAction(record.element, kAXRaiseAction as CFString)
-                    DispatchQueue.main.async {
-                        completion(result == .success ? nil : "This window is no longer available (\(result.rawValue)).")
-                    }
-                    self.refresh()
-                }
-            }
-        }
-    }
 }

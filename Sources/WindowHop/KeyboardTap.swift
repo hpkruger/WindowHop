@@ -21,6 +21,7 @@ final class KeyboardTap {
     var onStep: ((Bool) -> Bool)?
     var onCommit: (() -> Void)?
     var onCancel: (() -> Void)?
+    var onExternalInteraction: (() -> Void)?
     var pointerIsInside: ((CGPoint) -> Bool)?
     var isRunning: Bool { tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
 
@@ -86,6 +87,7 @@ final class KeyboardTap {
             // Typing elsewhere dismisses the picker and reaches the intended app.
             if gesture { cancel() }
         }
+        if type == .keyDown || type == .leftMouseDown || type == .rightMouseDown { onExternalInteraction?() }
         return Unmanaged.passUnretained(event)
     }
 }

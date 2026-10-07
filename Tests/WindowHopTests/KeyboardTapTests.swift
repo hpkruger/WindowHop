@@ -124,4 +124,19 @@ final class KeyboardTapTests: XCTestCase {
         XCTAssertTrue(tap.handle(.leftMouseDown, event()) != nil)
         XCTAssertEqual(cancels, 2)
     }
+
+    func testNewShortcutDoesNotCancelPendingActivationButTypingDoes() {
+        let tap = KeyboardTap()
+        var interactions = 0
+        tap.onStep = { _ in true }
+        tap.onExternalInteraction = { interactions += 1 }
+        _ = tap.handle(.keyDown, event())
+        _ = tap.handle(.flagsChanged, event(flags: []))
+        _ = tap.handle(.keyDown, event())
+        XCTAssertEqual(interactions, 0)
+        _ = tap.handle(.keyDown, event(0, flags: []))
+        XCTAssertEqual(interactions, 1)
+        _ = tap.handle(.leftMouseDown, event())
+        XCTAssertEqual(interactions, 2)
+    }
 }

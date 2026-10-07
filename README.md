@@ -29,7 +29,8 @@ WindowHop puts individual windows in a single picker. Two Safari windows get two
 - **Preview windows at a glance.** Live thumbnails are enabled by default and can be turned off in Settings for a compact picker.
 - **Choose Option+Tab or Command+Tab.** Change the shortcut in Settings; your choice survives restarts.
 - **Restore minimized windows.** Selecting a window unhides its app and restores the window before raising it.
-- **Return to recent windows.** WindowHop tracks focus while running and keeps the order steady while you cycle.
+- **Return to recent windows.** Rapid taps alternate between your last two windows. Focus events update history independently of window discovery, and the order stays steady while you cycle.
+- **Choose which Spaces to include.** Current Space is the default; choose All Spaces in Settings to include windows on other desktops. Minimized, hidden, and unidentifiable windows remain available in either mode.
 - **Go either direction.** Add Shift to reverse, use arrow keys to navigate, or click a window.
 - **Stay out of the way.** A menu-bar utility with a picker that does not take keyboard focus from your work.
 
@@ -91,8 +92,8 @@ WindowHop does not save preview images or record keystrokes, send network reques
 
 This is an early version. The build, keyboard callback logic, native configuration UI, and restoration of a real minimized window have been tested. Physical shortcut interception and full-screen, cross-Space, and multi-display behaviour still need broader hands-on validation. See [validation notes](TESTING.md).
 
-- **Spaces and full-screen windows:** visibility and activation depend on what each app exposes through Accessibility and how macOS handles Space changes. WindowHop does not move windows between Spaces.
-- **Recent ordering starts at launch:** previously unseen windows initially sort by app and title. Past usage cannot be recovered after a restart.
+- **Spaces and full-screen windows:** Current Space includes the visible desktops across your displays. Public macOS APIs cannot reliably identify the Space of minimized or hidden windows, or windows that cannot be matched unambiguously, so those remain available. All Spaces includes every discovered window. WindowHop verifies focus and retries briefly during transitions; it does not move windows between Spaces.
+- **Recent ordering starts at launch:** WindowHop seeds the list from the desktop’s window stacking order, then maintains recent-window history while running. Windows without a reliable Window Server match retain discovery order. Exact usage history from before a restart is unavailable.
 - **Some windows are excluded:** utility palettes, desktop elements, and WindowHop's own windows are not listed. Apps with unusual Accessibility implementations may behave differently.
 - **Shortcut conflicts:** Secure Input or another shortcut utility may prevent interception. Avoid assigning the same shortcut to two active utilities.
 - **After rebuilding:** ad-hoc signing can invalidate the existing Accessibility entry. Remove that entry and re-add the current installed app. An available Apple development identity can be supplied through `WINDOWHOP_SIGN_IDENTITY` when building.
@@ -112,12 +113,15 @@ The documentation preview is a separate app that renders the production picker. 
 
 | Source | Responsibility |
 | --- | --- |
-| `WindowCatalog.swift` | Window discovery, focus tracking, and restoration on a serial worker queue |
+| `WindowCatalog.swift` | Background window discovery and Accessibility notifications |
 | `KeyboardTap.swift` | Shortcut preferences and keyboard-event handling |
 | `SwitchSession.swift` | Stable selection and cycling for one gesture |
+| `WindowSwitchState.swift` | Immediate selection history, activation rollback, and Space preferences |
+| `WindowActivator.swift` | Target preparation, cancellable activation, and actual-focus verification |
+| `WindowServerSnapshot.swift` | Public window metadata for startup ordering and Space filtering |
 | `SwitcherUI.swift` | Native picker and Settings views |
 | `main.swift` | Menu-bar lifecycle and coordination |
 
-The keyboard callback works from a cached window list. Accessibility notifications update focus, and a periodic refresh reconciles window changes. Window discovery runs off the UI thread.
+The keyboard callback works from a cached window list. Accessibility notifications and per-app focus workers update history without waiting for discovery. Selecting a window updates switching history immediately; activation runs on a separate worker and verifies the exact focused window. Superseded requests cannot retry later, and failures restore the previous history. A periodic refresh reconciles window changes. Space visibility updates independently when the desktop changes. All Accessibility queries run off the UI thread.
 
 Found a window that will not switch, or a shortcut conflict? [Open an issue](https://github.com/hpkruger/WindowHop/issues) with your macOS version, the affected app, and steps to reproduce. Please remove private window titles from screenshots or logs.

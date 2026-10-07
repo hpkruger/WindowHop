@@ -1,12 +1,17 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
-swift build -c release
+BUILD_ARGS=()
+if [[ -n "${WINDOWHOP_BUILD_PATH:-}" ]]; then
+  BUILD_ARGS+=(--scratch-path "$WINDOWHOP_BUILD_PATH")
+fi
+swift build -c release "${BUILD_ARGS[@]}"
+BIN_DIR="$(swift build -c release "${BUILD_ARGS[@]}" --show-bin-path)"
 APP="$PWD/build/WindowHop.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swift scripts/make-icon.swift "$PWD/build/AppIcon.iconset"
 iconutil -c icns "$PWD/build/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
-cp .build/release/WindowHop "$APP/Contents/MacOS/WindowHop"
+cp "$BIN_DIR/WindowHop" "$APP/Contents/MacOS/WindowHop"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -10,16 +10,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let catalog = WindowCatalog()
     let keyboard = KeyboardTap()
+    let activator = WindowActivator()
+    var switchState = WindowSwitchState<UUID>()
+    private var activationPIDs = Set<pid_t>()
+    private var focusRequest: UInt64 = 0
+    private var focusQueues: [pid_t: DispatchQueue] = [:]
+    private let visibilityQueue = DispatchQueue(label: "WindowHop.visibility", qos: .userInteractive)
+    private var visibilityRequest: UInt64 = 0
     let model = SwitcherModel()
     let setup = SetupModel()
     var panel: SwitcherPanel!
     var setupWindow: NSWindow?
     var status: NSStatusItem!
     var windows: [WindowRecord] = []
-    var current: UUID?
     var session: SwitchSession<UUID>?
     var permissionTimer: Timer?
     var paused = false
+    private var permissionProblemReported = false
     var fixtureWindows: [NSWindow] = []
     private var previewCache: [UUID: CachedPreview] = [:]
     private let previewCacheLifetime: TimeInterval = 10
@@ -42,11 +49,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.target = self; menu.addItem(item)
         }
         status.menu = menu
-        catalog.onUpdate = { [weak self] records, current in
+        catalog.onUpdate = { [weak self] records in
             guard let self else { return }
-            self.windows = records; self.current = current; self.setup.count = records.count
+            self.windows = records
+            self.switchState.reconcile(records.map(\.id))
+            self.setup.count = self.availableWindows.count
             let liveIDs = Set(records.map(\.id))
             self.previewCache = self.previewCache.filter { liveIDs.contains($0.key) }
+            let livePIDs = Set(records.map(\.pid))
+            self.focusQueues = self.focusQueues.filter { livePIDs.contains($0.key) }
+            self.sampleFocus()
+            self.refreshVisibility()
+        }
+        catalog.onFocusEvent = { [weak self] element, pid in
+            guard let self, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+            if let window = self.windows.first(where: { $0.pid == pid && CFEqual($0.element, element) }) {
+                self.focusRequest &+= 1
+                self.switchState.observe(window.id)
+            } else {
+                // Until the focused-window query returns, the first MRU entry is
+                // the previous window, not a reliable description of the current one.
+                self.switchState.observe(nil)
+                self.sampleFocus()
+            }
         }
         catalog.onPreviews = { [weak self] previews in
             guard let self, self.setup.showPreviews else { return }
@@ -61,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyboard.onStep = { [weak self] backwards in self?.step(backwards: backwards) ?? false }
         keyboard.onCommit = { [weak self] in self?.commit() }
         keyboard.onCancel = { [weak self] in self?.dismiss() }
+        keyboard.onExternalInteraction = { [weak self] in self?.cancelActivation() }
         keyboard.pointerIsInside = { [weak self] point in
             guard let self, self.panel.isVisible else { return false }
             let top = NSScreen.screens.first?.frame.maxY ?? 0
@@ -97,7 +123,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSWorkspace.shared.open(url)
             }
         }
+        setup.scopeChanged = { [weak self] scope in
+            guard let self else { return }
+            scope.save()
+            self.dismiss()
+            self.setup.count = self.availableWindows.count
+            self.catalog.requestRefresh()
+        }
         setup.preview = { [weak self] in self?.preview() }
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(spaceChanged),
+            name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(workspaceChanged),
             name: NSWorkspace.didActivateApplicationNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(lockOrSleep),
@@ -107,8 +142,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         checkPermissions()
         catalog.start()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.checkPermissions() }
-        if !setup.trusted || !UserDefaults.standard.bool(forKey: "hasLaunched") { showSetup() }
-        UserDefaults.standard.set(true, forKey: "hasLaunched")
     }
 
     func checkPermissions() {
@@ -118,15 +151,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else { keyboard.stop(); setup.keyboardReady = false }
         status.menu?.items.first { $0.action == #selector(togglePause(_:)) }?.title = "\(paused ? "Resume" : "Pause") \(setup.shortcut.title)"
         status.button?.toolTip = paused ? "WindowHop — paused" : setup.keyboardReady ? "WindowHop — \(setup.shortcut.title)" : "WindowHop — Accessibility permission needed"
+        let permissionProblem = !setup.trusted || (!paused && !setup.keyboardReady)
+        setup.message = !setup.trusted ? "Enable Accessibility access for WindowHop."
+            : permissionProblem ? "WindowHop could not start its keyboard shortcut. Check Accessibility access, then quit and reopen WindowHop." : ""
+        // Report once per permission failure, so dismissing Settings keeps it
+        // dismissed until access recovers and a new failure occurs.
+        let shouldShow = permissionProblem && !permissionProblemReported
+        permissionProblemReported = permissionProblem
+        if shouldShow { showSetup() }
     }
 
     func step(backwards: Bool) -> Bool {
         var startedSession = false
         if session == nil {
-            guard !windows.isEmpty else { return false }
-            model.windows = windows
-            model.previews = model.showPreviews ? cachedPreviews(for: windows) : [:]
-            session = SwitchSession(ids: windows.map(\.id), current: current, backwards: backwards)
+            let available = availableWindows
+            guard !available.isEmpty else { return false }
+            model.windows = available
+            model.previews = model.showPreviews ? cachedPreviews(for: available) : [:]
+            session = SwitchSession(ids: available.map(\.id), current: switchState.current, backwards: backwards)
             startedSession = true
         } else { session?.step(backwards: backwards) }
         model.selected = session?.selected
@@ -142,8 +184,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target = model.windows.first { $0.id == session?.selected }
         dismiss()
         guard let target else { return }
-        catalog.activate(target) { [weak self] error in
-            if let error { self?.setup.message = error; self?.showSetup() }
+        // Commit intent synchronously, before any AX work, for rapid A → B → A.
+        let revision = switchState.beginActivation(target.id)
+        activationPIDs.insert(target.pid)
+        activator.activate(target) { [weak self] error in
+            guard let self, self.switchState.finishActivation(revision: revision, succeeded: error == nil) else { return }
+            self.activationPIDs.removeAll()
+            if let error {
+                self.checkPermissions()
+                self.setup.message = error
+            }
+            self.sampleFocus()
+            self.catalog.requestRefresh()
         }
     }
 
@@ -154,15 +206,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         panel?.orderOut(nil)
         model.previews.removeAll()
     }
-    @objc func workspaceChanged() { keyboard.cancel(); catalog.requestRefresh() }
-    @objc func lockOrSleep() { keyboard.cancel() }
+    @objc func workspaceChanged(_ notification: Notification) {
+        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        if let announced = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+           announced.processIdentifier != pid { return }
+        // App activation from our previous commit must not dismiss the next gesture.
+        let currentPID = windows.first { $0.id == switchState.current }?.pid
+        if !activationPIDs.contains(pid ?? 0) && currentPID != pid {
+            cancelActivation()
+            keyboard.cancel()
+            switchState.observe(nil)
+        }
+        sampleFocus()
+        catalog.requestRefresh()
+    }
+    @objc func spaceChanged() {
+        if switchState.pending == nil { keyboard.cancel() }
+        refreshVisibility()
+        catalog.requestRefresh()
+        sampleFocus()
+    }
+    @objc func lockOrSleep() { cancelActivation(); keyboard.cancel() }
+
+    private var availableWindows: [WindowRecord] {
+        let byID = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
+        return switchState.order.compactMap { byID[$0] }.filter {
+            setup.scope.includes(onScreen: $0.onScreen, minimized: $0.minimized, hidden: $0.hidden)
+        }
+    }
+
+    private func refreshVisibility() {
+        visibilityRequest &+= 1
+        let request = visibilityRequest
+        visibilityQueue.async { [weak self] in
+            let snapshot = WindowServerSnapshot.capture()
+            let visibility = Dictionary(uniqueKeysWithValues: snapshot.entries.map { ($0.number, $0.onScreen) })
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.visibilityRequest == request else { return }
+                for index in self.windows.indices {
+                    self.windows[index].onScreen = self.windows[index].windowNumber.flatMap { visibility[$0] }
+                }
+                self.setup.count = self.availableWindows.count
+            }
+        }
+    }
+
+    private func cancelActivation() {
+        guard switchState.pending != nil else { return }
+        activator.cancel()
+        _ = switchState.finishActivation(revision: switchState.revision, succeeded: false)
+        activationPIDs.removeAll()
+        sampleFocus()
+    }
+
+    /// Per-app queues mean a hung background app cannot delay focus tracking elsewhere.
+    private func sampleFocus() {
+        guard switchState.pending == nil else { return }
+        focusRequest &+= 1
+        let request = focusRequest
+        let revision = switchState.revision
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier, pid != getpid() else {
+            switchState.observe(nil); return
+        }
+        let queue = focusQueues[pid] ?? DispatchQueue(label: "WindowHop.focus.\(pid)", qos: .userInteractive)
+        focusQueues[pid] = queue
+        queue.async { [weak self] in
+            let application = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(application, 0.06)
+            let focused: AXUIElement? = axValue(application, kAXFocusedWindowAttribute)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.focusRequest == request, self.switchState.revision == revision,
+                      self.switchState.pending == nil,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+                if let focused, let record = self.windows.first(where: { $0.pid == pid && CFEqual($0.element, focused) }) {
+                    self.switchState.observe(record.id)
+                } else if focused != nil {
+                    self.switchState.observe(nil)
+                }
+            }
+        }
+    }
     @objc func preview() {
         // Menu previews can be dismissed by clicking a target or opening Settings.
         dismiss()
         setupWindow?.orderOut(nil)
-        if step(backwards: false) { keyboard.beginPreview() } else { showSetup() }
+        if step(backwards: false) { keyboard.beginPreview() } else { checkPermissions() }
     }
     @objc func togglePause(_ sender: NSMenuItem) {
+        cancelActivation()
         paused.toggle()
         checkPermissions()
     }
@@ -173,14 +304,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
             window.title = "WindowHop Settings"
             window.isReleasedWhenClosed = false
-            window.contentView = NSHostingView(rootView: SetupView(model: setup))
+            let content = SetupView(model: setup)
+            let idealHeight = NSHostingView(rootView: content).fittingSize.height
+            let availableHeight = max(400, (NSScreen.main?.visibleFrame.height ?? 900) - 80)
+            window.contentView = NSHostingView(rootView: ScrollView { content }
+                .frame(width: 510, height: min(idealHeight, availableHeight)))
             window.center(); setupWindow = window
         }
         NSApp.activate(ignoringOtherApps: true)
         setupWindow?.makeKeyAndOrderFront(nil)
     }
     @objc func quit() { NSApp.terminate(nil) }
-    func applicationWillTerminate(_ notification: Notification) { keyboard.stop() }
+    func applicationWillTerminate(_ notification: Notification) { activator.cancel(); keyboard.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !CommandLine.arguments.contains("--fixture"), panel?.isVisible != true { showSetup() }

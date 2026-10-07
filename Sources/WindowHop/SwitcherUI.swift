@@ -171,6 +171,8 @@ final class SwitcherPanel: NSPanel {
 
 final class SetupModel: ObservableObject {
     @Published var shortcut = SwitcherShortcut.load()
+    @Published var scope = WindowScope.load()
+    var scopeChanged: ((WindowScope) -> Void)?
     @Published var showPreviews = WindowPreviewPreference.load()
     var shortcutChanged: ((SwitcherShortcut) -> Void)?
     var previewsChanged: ((Bool) -> Void)?
@@ -205,6 +207,16 @@ struct SetupView: View {
                 Text(model.shortcut == .command
                      ? "Replaces the macOS app switcher while WindowHop is active. Pause or quit WindowHop to restore it."
                      : "Command+Tab continues to open the macOS app switcher.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Windows to include").font(.headline)
+                Picker("Windows to include", selection: $model.scope) {
+                    ForEach(WindowScope.allCases, id: \.self) { scope in Text(scope.title).tag(scope) }
+                }.pickerStyle(.segmented).labelsHidden()
+                    .onChange(of: model.scope) { model.scopeChanged?($0) }
+                Text("Current Space includes windows on your visible desktops. Minimized, hidden, and unidentifiable windows remain available because macOS cannot reliably report their Space.")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

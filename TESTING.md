@@ -20,3 +20,19 @@ Ad-hoc rebuilds invalidated Accessibility trust. Removing the stale WindowHop en
 - Refreshed the existing Accessibility grant for the new ad-hoc signature and verified “Command+Tab is ready.”
 - Inspected Settings and the picker; the controls, help text, and release hint reflect the selected modifier. Fixed clipped help text.
 - Physical Command+Tab interception of the macOS switcher remains a manual check; the callback logic and native configuration UI were tested.
+
+
+## Switching consistency update — 7 October 2026
+
+- All 30 XCTest tests passed with Xcode's macOS 27 SDK. Added regression coverage for rapid A → B → A selection before activation completes, stale completion rejection, intermediate app-window focus suppression, failure rollback, brief focus visits, startup seed order, Space preferences, ambiguous Window Server matches, verified-focus timeouts, superseded retries, restoration failures, and cancellation on unrelated input.
+- Focus/selection state is owned by the main thread. Discovery cannot overwrite MRU history. Background focus queries carry revision/request checks; focus work is separated per app. Activation has its own worker and no fixed 120 ms delay.
+- Release build and ad-hoc signing succeeded. Verified the installed app signature and matching SHA-256 hashes between the build and `~/Applications/WindowHop.app`.
+- Rendered and visually checked Settings and picker previews. Settings includes Current Space / All Spaces and uses a scrollable container on smaller displays. Installed app launches with Current Space selected and preserves the existing Command+Tab preference.
+- Xcode's build system hit a file-provider metadata signing error for the test bundle under the synced Documents folder. Tests passed with an isolated `/private/tmp/windowhop-switching-build` scratch directory. The build script now resolves the executable using SwiftPM's `--show-bin-path` and supports `WINDOWHOP_BUILD_PATH`.
+- Installing the rebuilt ad-hoc app invalidated the old Accessibility signature. With the user authenticating the Privacy & Security prompt, removed the stale entry and added the installed app again. A restart was needed; verified “Accessibility enabled” and “Command+Tab is ready.”
+
+Live verification: opened a temporary second Finder window, minimized it, confirmed both windows appeared separately in the picker, selected the minimized entry, and observed that exact window restored and focused. Closed both Finder windows opened for verification. Targeted Computer Use Command+Tab injection did not exercise the global tap reliably.
+
+Remaining live acceptance checks: physical rapid Command+Tab/Option+Tab gestures, cross-Space/full-screen transitions, multiple displays, and a genuinely unresponsive background app. Automated activation tests use an injected driver and do not claim to validate macOS focus behavior.
+
+Current Space intentionally retains minimized, hidden, and unmatched windows because public macOS APIs cannot reliably identify their Space. Startup stacking order approximates prior usage; exact pre-launch focus history cannot be recovered.
