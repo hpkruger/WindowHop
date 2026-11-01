@@ -36,3 +36,18 @@ Live verification: opened a temporary second Finder window, minimized it, confir
 Remaining live acceptance checks: physical rapid Command+Tab/Option+Tab gestures, cross-Space/full-screen transitions, multiple displays, and a genuinely unresponsive background app. Automated activation tests use an injected driver and do not claim to validate macOS focus behavior.
 
 Current Space intentionally retains minimized, hidden, and unmatched windows because public macOS APIs cannot reliably identify their Space. Startup stacking order approximates prior usage; exact pre-launch focus history cannot be recovered.
+
+## Detached-tab focus update — 1 November 2026
+
+- Window-creation notifications now invalidate cached focus for the frontmost app and request a fresh focus sample before window discovery completes. This prevents a quick switch from skipping the original browser window while it is still incorrectly marked current. Creation does not itself promote the new window, since a window can open in the background.
+- All 33 XCTest tests passed using `/private/tmp/windowhop-detached-tab-build`. New regression coverage exercises the creation-notification handler and switching history before/after delayed discovery, preserves pending activation intent, and checks delivery of existing focus notifications.
+- The release app built and was ad-hoc signed successfully at `build/WindowHop.app`. File-provider metadata in the synced Documents folder prevented strict signature verification there; a copy made with `ditto --norsrc --noextattr` outside that folder passed `codesign --verify --strict`. A subsequent build with persistent signing was installed as described below.
+- After installation and permission reapproval, the user reported that the Safari detached-tab switching scenario appears to work. Automated coverage also checks switching back to the detached window once discovery catches up; broader live switching checks remain as listed above.
+
+## Persistent local signing — 1 November 2026
+
+- Created the dedicated `WindowHop Local Signing` identity in the login Keychain. The private key was imported as non-extractable with access assigned to `/usr/bin/codesign`; temporary key and import files were removed. No system trust settings were changed.
+- The build script now reads the certificate fingerprint from `~/Library/Application Support/WindowHop/signing-identity`, unless `WINDOWHOP_SIGN_IDENTITY` is explicitly supplied. Invalid saved configuration or an unavailable configured identity fails the build rather than falling back to ad-hoc signing. Machines without saved configuration retain the original ad-hoc default.
+- Added `WINDOWHOP_APP_PATH` to allow packaging outside a synced folder. Built from a fresh SwiftPM scratch directory and installed the signed app at `~/Applications/WindowHop.app`. Strict signature verification and comparison with the release executable passed.
+- Verified signing continuity using a temporary copy with a changed bundle version: the code-directory hash changed, the certificate-based designated requirement remained identical, and the changed copy passed verification against the original requirement.
+- The new app launched with the existing Command+Tab, All Spaces, and preview preferences. After the user re-added WindowHop in macOS settings, verified the app reports “Accessibility enabled”, “Command+Tab is ready”, and 8 available windows. Future permission retention has not yet been verified through a subsequent live update.

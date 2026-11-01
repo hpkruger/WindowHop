@@ -44,11 +44,11 @@ cd WindowHop
 ./scripts/build.sh
 
 mkdir -p ~/Applications
-ditto build/WindowHop.app ~/Applications/WindowHop.app
+ditto --norsrc --noextattr build/WindowHop.app ~/Applications/WindowHop.app
 open ~/Applications/WindowHop.app
 ```
 
-This builds a local, ad-hoc-signed app. There is currently no notarized installer.
+This builds a local app. Signing uses `WINDOWHOP_SIGN_IDENTITY` when set, otherwise the certificate fingerprint saved in `~/Library/Application Support/WindowHop/signing-identity`. Without either, it uses ad-hoc signing. There is currently no notarized installer.
 
 ### First launch
 
@@ -96,7 +96,7 @@ This is an early version. The build, keyboard callback logic, native configurati
 - **Recent ordering starts at launch:** WindowHop seeds the list from the desktop’s window stacking order, then maintains recent-window history while running. Windows without a reliable Window Server match retain discovery order. Exact usage history from before a restart is unavailable.
 - **Some windows are excluded:** utility palettes, desktop elements, and WindowHop's own windows are not listed. Apps with unusual Accessibility implementations may behave differently.
 - **Shortcut conflicts:** Secure Input or another shortcut utility may prevent interception. Avoid assigning the same shortcut to two active utilities.
-- **After rebuilding:** ad-hoc signing can invalidate the existing Accessibility entry. Remove that entry and re-add the current installed app. An available Apple development identity can be supplied through `WINDOWHOP_SIGN_IDENTITY` when building.
+- **After rebuilding:** ad-hoc signing can invalidate the existing Accessibility entry. Remove that entry and re-add the current installed app. Reusing a persistent signing certificate keeps the app's signing identity stable across builds. Switching from ad-hoc signing to that certificate requires a one-time reapproval; subsequent updates should retain it.
 - **Start at login:** add WindowHop in macOS Login Items if you want it to launch automatically.
 
 ## Development
@@ -110,6 +110,14 @@ swift test                  # Selection, keyboard callback, and preference tests
 ```
 
 The documentation preview is a separate app that renders the production picker. It does not inspect your windows or install a keyboard tap.
+
+### Persistent local signing
+
+For local development, use a code-signing identity stored in your macOS Keychain. An Apple development certificate or a dedicated self-signed code-signing certificate works for local builds; the latter does not provide notarization or public distribution trust.
+
+Save that certificate's 40-character SHA-1 fingerprint, followed by a newline, in `~/Library/Application Support/WindowHop/signing-identity`. The build script reads this file automatically. Keep the same certificate and private key across builds: if the saved configuration is invalid or its identity is unavailable, the build fails instead of silently switching to ad-hoc signing. `WINDOWHOP_SIGN_IDENTITY` remains an explicit override, including `-` for ad-hoc builds.
+
+Only the public fingerprint belongs in that configuration file. Keep the private key in Keychain. Do not regenerate the certificate on each build. If building from a synced folder causes code-signature errors due to file-provider metadata, set `WINDOWHOP_APP_PATH` to an absolute `.app` path outside that folder; `WINDOWHOP_BUILD_PATH` can separately relocate SwiftPM's build cache.
 
 | Source | Responsibility |
 | --- | --- |

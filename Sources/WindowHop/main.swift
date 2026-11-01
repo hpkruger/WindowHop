@@ -63,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         catalog.onFocusEvent = { [weak self] element, pid in
             guard let self, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
-            if let window = self.windows.first(where: { $0.pid == pid && CFEqual($0.element, element) }) {
+            if let element, let window = self.windows.first(where: { $0.pid == pid && CFEqual($0.element, element) }) {
                 self.focusRequest &+= 1
                 self.switchState.observe(window.id)
             } else {

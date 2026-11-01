@@ -1,13 +1,23 @@
 #!/bin/zsh
 set -euo pipefail
 cd "${0:A:h:h}"
+SIGNING_CONFIG="$HOME/Library/Application Support/WindowHop/signing-identity"
+SIGN_IDENTITY="${WINDOWHOP_SIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" && -e "$SIGNING_CONFIG" ]]; then
+  SIGN_IDENTITY="$(cat "$SIGNING_CONFIG")"
+  if [[ ! "$SIGN_IDENTITY" =~ '^[[:xdigit:]]{40}$' ]]; then
+    print -u2 -- "Invalid signing identity in $SIGNING_CONFIG; refusing to fall back to ad-hoc signing."
+    exit 1
+  fi
+fi
+SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 BUILD_ARGS=()
 if [[ -n "${WINDOWHOP_BUILD_PATH:-}" ]]; then
   BUILD_ARGS+=(--scratch-path "$WINDOWHOP_BUILD_PATH")
 fi
 swift build -c release "${BUILD_ARGS[@]}"
 BIN_DIR="$(swift build -c release "${BUILD_ARGS[@]}" --show-bin-path)"
-APP="$PWD/build/WindowHop.app"
+APP="${WINDOWHOP_APP_PATH:-$PWD/build/WindowHop.app}"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swift scripts/make-icon.swift "$PWD/build/AppIcon.iconset"
 iconutil -c icns "$PWD/build/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
@@ -29,7 +39,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-# Set WINDOWHOP_SIGN_IDENTITY to a development identity for stable permissions across rebuilds.
+# Reuse this Mac's saved certificate unless explicitly overridden. codesign fails
+# if the configured private key is missing; never silently replace it with ad-hoc signing.
 xattr -cr "$APP"
-codesign --force --sign "${WINDOWHOP_SIGN_IDENTITY:--}" --identifier local.hanskruger.WindowHop "$APP"
+codesign --force --sign "$SIGN_IDENTITY" --identifier local.hanskruger.WindowHop "$APP"
 print -r -- "$APP"

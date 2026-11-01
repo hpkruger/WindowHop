@@ -51,7 +51,8 @@ final class WindowCatalog {
     private var iconCache: [pid_t: NSImage] = [:]
     private var previewRequestNumber: UInt64 = 0
     var onUpdate: (([WindowRecord]) -> Void)?
-    var onFocusEvent: ((AXUIElement, pid_t) -> Void)?
+    // nil invalidates cached focus while a newly created window is being discovered.
+    var onFocusEvent: ((AXUIElement?, pid_t) -> Void)?
     var onPreviews: (([UUID: NSImage]) -> Void)?
 
     func start() {
@@ -339,13 +340,8 @@ final class WindowCatalog {
         let callback: AXObserverCallback = { _, element, notification, context in
             guard let context else { return }
             let catalog = Unmanaged<WindowCatalog>.fromOpaque(context).takeUnretainedValue()
-            if notification as String == kAXFocusedWindowChangedNotification || notification as String == kAXApplicationActivatedNotification {
-                var pid: pid_t = 0
-                AXUIElementGetPid(element, &pid)
-                catalog.onFocusEvent?(element, pid)
-            } else {
-                catalog.requestRefresh()
-            }
+            catalog.handleNotification(notification as String, element: element,
+                                       refresh: catalog.requestRefresh)
         }
         guard AXObserverCreate(pid, callback, &observer) == .success, let observer else { return }
         for notification in [kAXFocusedWindowChangedNotification, kAXWindowCreatedNotification,
@@ -355,6 +351,24 @@ final class WindowCatalog {
         }
         observers[pid] = observer
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+    }
+
+    func handleNotification(_ notification: String, element: AXUIElement, refresh: () -> Void) {
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        switch notification {
+        case kAXWindowCreatedNotification:
+            // Detaching a browser tab can create a focused window before discovery
+            // finishes, without activating a different app. Do not keep treating the
+            // original window as current: a quick switch would skip over it.
+            // Creation alone does not prove focus, so resample rather than promote it.
+            onFocusEvent?(nil, pid)
+            refresh()
+        case kAXFocusedWindowChangedNotification, kAXApplicationActivatedNotification:
+            onFocusEvent?(element, pid)
+        default:
+            refresh()
+        }
     }
 
 }
