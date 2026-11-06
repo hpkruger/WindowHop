@@ -150,7 +150,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setup.keyboardReady = keyboard.start()
         } else { keyboard.stop(); setup.keyboardReady = false }
         status.menu?.items.first { $0.action == #selector(togglePause(_:)) }?.title = "\(paused ? "Resume" : "Pause") \(setup.shortcut.title)"
-        status.button?.toolTip = paused ? "WindowHop — paused" : setup.keyboardReady ? "WindowHop — \(setup.shortcut.title)" : "WindowHop — Accessibility permission needed"
+        // Native status-item tooltips can linger over unrelated apps. Keep this
+        // information in accessibility help and the menu without a hover popup.
+        status.button?.toolTip = nil
+        status.button?.setAccessibilityHelp(paused ? "WindowHop — paused" : setup.keyboardReady ? "WindowHop — \(setup.shortcut.title)" : "WindowHop — Accessibility permission needed")
         let permissionProblem = !setup.trusted || (!paused && !setup.keyboardReady)
         setup.message = !setup.trusted ? "Enable Accessibility access for WindowHop."
             : permissionProblem ? "WindowHop could not start its keyboard shortcut. Check Accessibility access, then quit and reopen WindowHop." : ""
