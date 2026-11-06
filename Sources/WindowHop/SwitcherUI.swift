@@ -170,6 +170,9 @@ final class SwitcherPanel: NSPanel {
 }
 
 final class SetupModel: ObservableObject {
+    @Published var notificationSwitchEnabled = NotificationSwitchPreference.load()
+    @Published var notificationStatus = "Waiting for a new notification."
+    var notificationSwitchChanged: ((Bool) -> Void)?
     @Published var shortcut = SwitcherShortcut.load()
     @Published var scope = WindowScope.load()
     var scopeChanged: ((WindowScope) -> Void)?
@@ -219,6 +222,17 @@ struct SetupView: View {
                 Text("Current Space includes windows on your visible desktops. Minimized, hidden, and unidentifiable windows remain available because macOS cannot reliably report their Space.")
                     .font(.system(size: 12)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle("Switch to the app that just notified me", isOn: $model.notificationSwitchEnabled)
+                    .onChange(of: model.notificationSwitchEnabled) { model.notificationSwitchChanged?($0) }
+                Text("Press \(NotificationSwitchPreference.shortcutTitle) to bring the latest notifying app forward. Remembers new banners for two minutes while enabled. Does not select a specific conversation.")
+                    .font(.system(size: 12)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if model.notificationSwitchEnabled {
+                    Text(model.notificationStatus).font(.system(size: 12)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             VStack(alignment: .leading, spacing: 8) {
                 Toggle("Show window previews", isOn: $model.showPreviews)

@@ -3,6 +3,46 @@ import CoreGraphics
 @testable import WindowHop
 
 final class KeyboardTapTests: XCTestCase {
+    func testNotificationShortcutIsOffByDefaultAndDoesNotSwallowInput() {
+        let tap = KeyboardTap()
+        var calls = 0
+        tap.onNotificationSwitch = { calls += 1 }
+        XCTAssertTrue(tap.handle(.keyDown, event(45, flags: [.maskCommand, .maskAlternate])) != nil)
+        XCTAssertTrue(tap.handle(.keyUp, event(45, flags: [])) != nil)
+        XCTAssertEqual(calls, 0)
+    }
+
+    func testNotificationShortcutCancelsPickerAndConsumesRepeatAndKeyUp() {
+        let tap = KeyboardTap()
+        tap.notificationSwitchEnabled = true
+        var calls = 0; var commits = 0; var cancellations = 0
+        tap.onNotificationSwitch = { calls += 1 }
+        tap.onCommit = { commits += 1 }
+        tap.onCancel = { cancellations += 1 }
+        tap.beginPreview()
+        XCTAssertNil(tap.handle(.keyDown, event(45, flags: [.maskCommand, .maskAlternate])))
+        let repeated = event(45, flags: [.maskCommand, .maskAlternate])
+        repeated.setIntegerValueField(.keyboardEventAutorepeat, value: 1)
+        XCTAssertNil(tap.handle(.keyDown, repeated))
+        tap.notificationSwitchEnabled = false
+        XCTAssertNil(tap.handle(.keyUp, event(45, flags: [])))
+        _ = tap.handle(.flagsChanged, event(flags: []))
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(commits, 0)
+        XCTAssertEqual(cancellations, 1)
+    }
+
+    func testNotificationShortcutLeavesOtherModifierCombinationsAlone() {
+        let tap = KeyboardTap()
+        tap.notificationSwitchEnabled = true
+        var calls = 0
+        tap.onNotificationSwitch = { calls += 1 }
+        for flags: CGEventFlags in [.maskAlternate, .maskCommand, [.maskControl, .maskAlternate], [.maskCommand, .maskAlternate, .maskShift], [.maskControl, .maskAlternate, .maskCommand]] {
+            XCTAssertTrue(tap.handle(.keyDown, event(45, flags: flags)) != nil)
+        }
+        XCTAssertEqual(calls, 0)
+    }
+
     func testBothShortcutsUseTheirOwnModifierAndRelease() {
         for shortcut in SwitcherShortcut.allCases {
             let tap = KeyboardTap()

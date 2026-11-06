@@ -22,6 +22,8 @@ final class KeyboardTap {
     var onCommit: (() -> Void)?
     var onCancel: (() -> Void)?
     var onExternalInteraction: (() -> Void)?
+    var notificationSwitchEnabled = false
+    var onNotificationSwitch: (() -> Void)?
     var pointerIsInside: ((CGPoint) -> Bool)?
     var isRunning: Bool { tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false }
 
@@ -71,6 +73,15 @@ final class KeyboardTap {
             onCommit?()
         }
         if type == .keyDown {
+            let modifiers = event.flags.intersection([.maskControl, .maskAlternate, .maskCommand, .maskShift])
+            if notificationSwitchEnabled, key == 45, modifiers == [.maskCommand, .maskAlternate] {
+                if event.getIntegerValueField(.keyboardEventAutorepeat) == 0 {
+                    cancel()
+                    onNotificationSwitch?()
+                }
+                swallowedKeys.insert(key)
+                return nil
+            }
             if key == 48, modifierHeld, !event.flags.contains(shortcut.excludedModifier), !event.flags.contains(.maskControl) {
                 if onStep?(event.flags.contains(.maskShift)) == true {
                     gesture = true; swallowedKeys.insert(key); return nil

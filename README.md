@@ -33,6 +33,7 @@ WindowHop puts individual windows in a single picker. Two Safari windows get two
 - **Choose which Spaces to include.** Current Space is the default; choose All Spaces in Settings to include windows on other desktops. Minimized, hidden, and unidentifiable windows remain available in either mode.
 - **Go either direction.** Add Shift to reverse, use arrow keys to navigate, or click a window.
 - **Stay out of the way.** A menu-bar utility with a picker that does not take keyboard focus from your work.
+- **Jump to the app that just notified you.** Enable the optional notification shortcut in Settings, then press **Command+Option+N** to bring that app forward. Off by default.
 
 ## Build and install
 
@@ -84,6 +85,20 @@ The picker opens on the display containing your pointer. You can also open it wi
 
 ## Permissions and privacy
 
+### Optional notification switching
+
+In Settings, turn on **Switch to the app that just notified me**. When a new banner appears, **Command+Option+N** brings its source app's most recently used window forward, restoring it if minimized. This explicit app jump includes other Spaces regardless of the window picker's Space filter. If the running app has no catalogued window, WindowHop activates the app. It does not select a specific conversation, click the notification, or send a reply.
+
+The latest identified app stays available for **two minutes**, including after the banner disappears. A new unidentifiable notification clears the previous target; simultaneous notifications from different apps are treated as ambiguous. If no recent app can be identified, the shortcut beeps and Settings explains why. A menu-bar action provides the same switch.
+
+This feature is **off by default**. Turning it off stops monitoring, clears the remembered target, and leaves Command+Option+N available to other apps. Pausing WindowHop, losing Accessibility permission, and sleep/session deactivation also stop monitoring and clear its state. Notifications already present when monitoring starts are ignored. Avoid using the shortcut alongside a conflicting utility or VoiceOver command.
+
+Detection uses Notification Centre's Accessibility UI and matches its source-app name to a running application. Only new visible banners while Notification Centre is collapsed are considered; notifications suppressed by Focus, history in the expanded drawer, quit apps, and ambiguous names are not supported. macOS UI changes or localized app-name differences can prevent a match. It needs no additional permission beyond WindowHop's Accessibility access.
+
+Notification descriptions are examined transiently to identify the source app. Message contents are not logged or saved. Only the latest app identity, detection time, and a bounded set of opaque banner identifiers remain in memory while enabled.
+
+### Window access
+
 WindowHop needs **Accessibility** access to read window titles, handle its shortcut, and focus or restore windows. Live window previews also use macOS **Screen Recording** access; if that permission is unavailable, the picker continues to show titles and icons.
 
 WindowHop does not save preview images or record keystrokes, send network requests, or save window-title history. Recent-window history stays in memory. Turn previews off in Settings if you do not want it to use Screen Recording access.
@@ -126,6 +141,7 @@ Only the public fingerprint belongs in that configuration file. Keep the private
 | `SwitchSession.swift` | Stable selection and cycling for one gesture |
 | `WindowSwitchState.swift` | Immediate selection history, activation rollback, and Space preferences |
 | `WindowActivator.swift` | Target preparation, cancellable activation, and actual-focus verification |
+| `NotificationMonitor.swift` | Opt-in banner detection, source-app matching, and temporary notification state |
 | `WindowServerSnapshot.swift` | Public window metadata for startup ordering and Space filtering |
 | `SwitcherUI.swift` | Native picker and Settings views |
 | `main.swift` | Menu-bar lifecycle and coordination |

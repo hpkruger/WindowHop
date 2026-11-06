@@ -11,6 +11,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let catalog = WindowCatalog()
     let keyboard = KeyboardTap()
     let activator = WindowActivator()
+    let notificationMonitor = NotificationMonitor()
+    private var sessionInactive = false
     var switchState = WindowSwitchState<UUID>()
     private var activationPIDs = Set<pid_t>()
     private var focusRequest: UInt64 = 0
@@ -42,6 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.button?.image = NSImage(systemSymbolName: "rectangle.on.rectangle", accessibilityDescription: "WindowHop")
         let menu = NSMenu()
         for (title, action, key) in [("Show Windows", #selector(preview), ""),
+                                     ("Switch to Notifying App", #selector(switchToNotifyingApp), ""),
                                      ("Settings…", #selector(showSetup), ","),
                                      ("Pause \(setup.shortcut.title)", #selector(togglePause(_:)), ""),
                                      ("Quit WindowHop", #selector(quit), "q")] {
@@ -87,6 +90,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyboard.onCommit = { [weak self] in self?.commit() }
         keyboard.onCancel = { [weak self] in self?.dismiss() }
         keyboard.onExternalInteraction = { [weak self] in self?.cancelActivation() }
+        keyboard.onNotificationSwitch = { [weak self] in self?.switchToNotifyingApp() }
+        notificationMonitor.onChange = { [weak self] target, message in
+            guard let self else { return }
+            self.setup.notificationStatus = message
+            self.status.menu?.items.first { $0.action == #selector(self.switchToNotifyingApp) }?.title =
+                target.map { "Switch to \($0.app.name) (\(NotificationSwitchPreference.shortcutTitle))" } ?? "Switch to Notifying App"
+        }
+        setup.notificationSwitchChanged = { [weak self] enabled in
+            NotificationSwitchPreference.save(enabled)
+            self?.updateNotificationMonitoring()
+        }
         keyboard.pointerIsInside = { [weak self] point in
             guard let self, self.panel.isVisible else { return false }
             let top = NSScreen.screens.first?.frame.maxY ?? 0
@@ -139,6 +153,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             name: NSWorkspace.willSleepNotification, object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(lockOrSleep),
             name: NSWorkspace.sessionDidResignActiveNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(sessionResumed),
+            name: NSWorkspace.sessionDidBecomeActiveNotification, object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(sessionResumed),
+            name: NSWorkspace.didWakeNotification, object: nil)
         checkPermissions()
         catalog.start()
         permissionTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.checkPermissions() }
@@ -149,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if setup.trusted && !paused {
             setup.keyboardReady = keyboard.start()
         } else { keyboard.stop(); setup.keyboardReady = false }
+        updateNotificationMonitoring()
         status.menu?.items.first { $0.action == #selector(togglePause(_:)) }?.title = "\(paused ? "Resume" : "Pause") \(setup.shortcut.title)"
         // Native status-item tooltips can linger over unrelated apps. Keep this
         // information in accessibility help and the menu without a hover popup.
@@ -187,6 +206,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let target = model.windows.first { $0.id == session?.selected }
         dismiss()
         guard let target else { return }
+        activateWindow(target)
+    }
+
+    private func activateWindow(_ target: WindowRecord) {
         // Commit intent synchronously, before any AX work, for rapid A → B → A.
         let revision = switchState.beginActivation(target.id)
         activationPIDs.insert(target.pid)
@@ -229,7 +252,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         catalog.requestRefresh()
         sampleFocus()
     }
-    @objc func lockOrSleep() { cancelActivation(); keyboard.cancel() }
+    @objc func lockOrSleep() {
+        cancelActivation(); keyboard.cancel()
+        sessionInactive = true
+        updateNotificationMonitoring()
+    }
+    @objc func sessionResumed() {
+        sessionInactive = false
+        updateNotificationMonitoring()
+    }
+
+    private func updateNotificationMonitoring() {
+        let enabled = setup.notificationSwitchEnabled && setup.trusted && !paused && !sessionInactive
+        keyboard.notificationSwitchEnabled = enabled
+        if enabled { notificationMonitor.start() } else { notificationMonitor.stop() }
+        status.menu?.items.first { $0.action == #selector(switchToNotifyingApp) }?.isHidden = !setup.notificationSwitchEnabled
+    }
+
+    @objc func switchToNotifyingApp() {
+        guard keyboard.notificationSwitchEnabled else { return }
+        cancelActivation()
+        dismiss()
+        guard let target = notificationMonitor.target else {
+            setup.notificationStatus = "No recent notification could be matched to a running app."
+            NSSound.beep()
+            return
+        }
+        let apps = NSRunningApplication.runningApplications(withBundleIdentifier: target.app.bundleIdentifier)
+            .filter { !$0.isTerminated && $0.activationPolicy == .regular }
+        // Multiple instances of the same bundle cannot be distinguished by a banner.
+        guard apps.count == 1, let app = apps.first else {
+            setup.notificationStatus = "The notifying app has closed or has multiple running instances."
+            NSSound.beep()
+            return
+        }
+        let records = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
+        // An explicit app jump uses its most recent window even on another Space.
+        if let window = switchState.order.compactMap({ records[$0] }).first(where: { $0.pid == app.processIdentifier }) {
+            activateWindow(window)
+        } else {
+            app.unhide()
+            if !app.activate(options: [.activateIgnoringOtherApps]) {
+                setup.notificationStatus = "macOS could not activate \(target.app.name)."
+                NSSound.beep()
+            }
+            catalog.requestRefresh()
+        }
+    }
 
     private var availableWindows: [WindowRecord] {
         let byID = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
@@ -318,7 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupWindow?.makeKeyAndOrderFront(nil)
     }
     @objc func quit() { NSApp.terminate(nil) }
-    func applicationWillTerminate(_ notification: Notification) { activator.cancel(); keyboard.stop() }
+    func applicationWillTerminate(_ notification: Notification) { notificationMonitor.stop(); activator.cancel(); keyboard.stop() }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !CommandLine.arguments.contains("--fixture"), panel?.isVisible != true { showSetup() }

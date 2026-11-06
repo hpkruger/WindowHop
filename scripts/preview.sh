@@ -7,6 +7,7 @@ mkdir -p "$APP/Contents/MacOS"
 # allows the legacy CoreGraphics window-snapshot API on macOS 13–14.
 swiftc -swift-version 5 -target "$(uname -m)-apple-macosx13.0" -O \
   Sources/WindowHop/KeyboardTap.swift \
+  Sources/WindowHop/NotificationMonitor.swift \
   Sources/WindowHop/WindowCatalog.swift \
   Sources/WindowHop/WindowServerSnapshot.swift \
   Sources/WindowHop/WindowSwitchState.swift \
