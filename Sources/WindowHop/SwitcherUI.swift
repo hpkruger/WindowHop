@@ -173,6 +173,8 @@ final class SwitcherPanel: NSPanel {
 }
 
 final class SetupModel: ObservableObject {
+    let buildDate = (Bundle.main.object(forInfoDictionaryKey: "WindowHopBuildTimestamp") as? Int)
+        .map { Date(timeIntervalSince1970: TimeInterval($0)) }
     @Published var notificationSwitchEnabled = NotificationSwitchPreference.load()
     @Published var notificationStatus = "Waiting for a new notification."
     var notificationSwitchChanged: ((Bool) -> Void)?
@@ -201,6 +203,10 @@ struct SetupView: View {
                 Text("Your windows. One shortcut.").font(.system(size: 27, weight: .bold))
                 Text("Switch between individual windows with \(model.shortcut.title), including minimized windows.")
                     .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if let buildDate = model.buildDate {
+                    Text("Last updated: \(buildDate.formatted(date: .abbreviated, time: .standard))")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             VStack(alignment: .leading, spacing: 8) {
                 Text("Switching shortcut").font(.headline)

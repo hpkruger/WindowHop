@@ -25,6 +25,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>LSUIElement</key><true/>
 </dict></plist>
 PLIST
+plutil -insert WindowHopBuildTimestamp -integer "$(date +%s)" "$APP/Contents/Info.plist"
 xattr -cr "$APP"
 # Documents folders can add bundle-level Finder/FileProvider metadata after the
 # recursive clear; remove it explicitly before ad-hoc signing.

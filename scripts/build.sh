@@ -39,6 +39,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
+plutil -insert WindowHopBuildTimestamp -integer "$(date +%s)" "$APP/Contents/Info.plist"
 # Reuse this Mac's saved certificate unless explicitly overridden. codesign fails
 # if the configured private key is missing; never silently replace it with ad-hoc signing.
 xattr -cr "$APP"
