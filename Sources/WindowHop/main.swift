@@ -2,18 +2,14 @@ import AppKit
 import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private struct CachedPreview {
-        let image: NSImage
-        let title: String
-        let capturedAt: Date
-    }
-
     let catalog = WindowCatalog()
     let keyboard = KeyboardTap()
     let activator = WindowActivator()
     let notificationMonitor = NotificationMonitor()
     private var sessionInactive = false
-    var switchState = WindowSwitchState<UUID>()
+    private var switchState = WindowSwitchState<AXUIElement>()
+    private var windowIndices: [AXUIElement: Int] = [:]
+    private var undiscoveredFocus: [AXUIElement] = []
     private var activationPIDs = Set<pid_t>()
     private var focusRequest: UInt64 = 0
     private var focusQueues: [pid_t: DispatchQueue] = [:]
@@ -30,9 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var paused = false
     private var permissionProblemReported = false
     var fixtureWindows: [NSWindow] = []
-    private var previewCache: [UUID: CachedPreview] = [:]
-    private let previewCacheLifetime: TimeInterval = 10
-    private let previewCacheLimit = 24
+    private var previewCache = WindowPreviewCache()
+    private let previewLoader = WindowPreviewLoader()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         if CommandLine.arguments.contains("--fixture") { launchFixture(); return }
@@ -54,11 +49,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         status.menu = menu
         catalog.onUpdate = { [weak self] records in
             guard let self else { return }
-            self.windows = records
-            self.switchState.reconcile(records.map(\.id))
+            self.updateWindowHistory(records)
             self.setup.count = self.availableWindows.count
-            let liveIDs = Set(records.map(\.id))
-            self.previewCache = self.previewCache.filter { liveIDs.contains($0.key) }
+            self.previewCache.reconcile(records)
             let livePIDs = Set(records.map(\.pid))
             self.focusQueues = self.focusQueues.filter { livePIDs.contains($0.key) }
             self.sampleFocus()
@@ -66,25 +59,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         catalog.onFocusEvent = { [weak self] element, pid in
             guard let self, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
-            if let element, let window = self.windows.first(where: { $0.pid == pid && CFEqual($0.element, element) }) {
-                self.focusRequest &+= 1
-                self.switchState.observe(window.id)
+            self.focusRequest &+= 1
+            if let element, element != AXUIElementCreateApplication(pid) {
+                self.observeFocus(element)
+                if self.currentWindow != nil { return }
             } else {
-                // Until the focused-window query returns, the first MRU entry is
-                // the previous window, not a reliable description of the current one.
                 self.switchState.observe(nil)
-                self.sampleFocus()
             }
-        }
-        catalog.onPreviews = { [weak self] previews in
-            guard let self, self.setup.showPreviews else { return }
-            let capturedAt = Date()
-            for (id, image) in previews {
-                guard let window = self.model.windows.first(where: { $0.id == id }) else { continue }
-                self.previewCache[id] = CachedPreview(image: image, title: window.title, capturedAt: capturedAt)
-            }
-            self.trimPreviewCache()
-            self.model.previews.merge(previews) { _, latest in latest }
+            self.sampleFocus()
         }
         keyboard.onStep = { [weak self] backwards in self?.step(backwards: backwards) ?? false }
         keyboard.onCommit = { [weak self] in self?.commit() }
@@ -126,11 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self else { return }
             WindowPreviewPreference.save(enabled)
             self.model.showPreviews = enabled
-            self.model.previews.removeAll()
-            if !enabled {
-                self.previewCache.removeAll()
-                self.catalog.cancelPreviewRequests()
-            }
+            self.dismiss()
+            if !enabled { self.previewCache = WindowPreviewCache() }
         }
         setup.openScreenRecordingSettings = {
             if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
@@ -183,35 +162,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if shouldShow { showSetup() }
     }
 
-    func step(backwards: Bool) -> Bool {
-        var startedSession = false
+    func step(backwards: Bool, fromMenu: Bool = false) -> Bool {
         if session == nil {
             let available = availableWindows
             guard !available.isEmpty else { return false }
             model.windows = available
-            model.previews = model.showPreviews ? cachedPreviews(for: available) : [:]
-            session = SwitchSession(ids: available.map(\.id), current: switchState.current, backwards: backwards)
-            startedSession = true
-        } else { session?.step(backwards: backwards) }
+            model.openedFromMenu = fromMenu
+            session = SwitchSession(ids: available.map(\.id), current: currentWindow?.id, backwards: backwards,
+                                    frontmostPID: NSWorkspace.shared.frontmostApplication?.processIdentifier)
+            if model.showPreviews {
+                let previews = previewCache.previews(for: available)
+                model.previews = previews.display
+                previewLoader.start(previews.pending, selected: session?.selected) { [weak self] window, image in
+                    guard let self else { return }
+                    if let image {
+                        self.previewCache.store(image, for: window)
+                        self.model.previews[window.id] = .image(image)
+                    } else if self.model.previews[window.id] == nil {
+                        self.model.previews[window.id] = .unavailable
+                    }
+                }
+            }
+        } else {
+            session?.step(backwards: backwards)
+            if model.showPreviews { previewLoader.selected = session?.selected }
+        }
         model.selected = session?.selected
         panel.present(showPreviews: model.showPreviews)
-        if model.showPreviews && startedSession {
-            catalog.requestPreviews(for: model.windows, selected: model.selected,
-                                    excluding: Set(model.previews.keys))
-        }
         return true
     }
 
-    func commit() {
-        let target = model.windows.first { $0.id == session?.selected }
+    func commit(frontmostPID: pid_t? = NSWorkspace.shared.frontmostApplication?.processIdentifier) {
+        validateSession(frontmostPID: frontmostPID)
+        guard let selected = session?.selected else { return }
         dismiss()
-        guard let target else { return }
+        guard let target = windows.first(where: { $0.id == selected }) else { return }
         activateWindow(target)
     }
 
     private func activateWindow(_ target: WindowRecord) {
         // Commit intent synchronously, before any AX work, for rapid A → B → A.
-        let revision = switchState.beginActivation(target.id)
+        let revision = switchState.beginActivation(target.element)
         activationPIDs.insert(target.pid)
         activator.activate(target) { [weak self] error in
             guard let self, self.switchState.finishActivation(revision: revision, succeeded: error == nil) else { return }
@@ -219,6 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let error {
                 self.checkPermissions()
                 self.setup.message = error
+            } else if self.session != nil, NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid {
+                // Verification may precede the workspace notification during a rapid switch.
+                self.session?.frontmostPID = target.pid
             }
             self.sampleFocus()
             self.catalog.requestRefresh()
@@ -227,7 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func dismiss() {
         keyboard.endGesture()
-        catalog.cancelPreviewRequests()
+        previewLoader.cancel()
         session = nil
         panel?.orderOut(nil)
         model.previews.removeAll()
@@ -236,16 +230,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
         if let announced = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
            announced.processIdentifier != pid { return }
-        // App activation from our previous commit must not dismiss the next gesture.
-        let currentPID = windows.first { $0.id == switchState.current }?.pid
-        if !activationPIDs.contains(pid ?? 0) && currentPID != pid {
-            cancelActivation()
-            keyboard.cancel()
-            switchState.observe(nil)
-        }
+        applicationActivated(pid)
         sampleFocus()
         catalog.requestRefresh()
     }
+
+    func applicationActivated(_ pid: pid_t?) {
+        validateSession(frontmostPID: pid)
+        if !activationPIDs.contains(pid ?? 0), currentWindow?.pid != pid {
+            cancelActivation()
+            switchState.observe(nil)
+        }
+    }
+
+    // AX focus and workspace activation can arrive in either order. Compare
+    // against the app that owned the gesture, independently of the MRU list.
+    private func validateSession(frontmostPID pid: pid_t?) {
+        guard let session else { return }
+        if let pid, activationPIDs.contains(pid) {
+            self.session?.frontmostPID = pid
+        } else if session.frontmostPID != pid {
+            dismiss()
+            cancelActivation()
+        }
+    }
+
     @objc func spaceChanged() {
         if switchState.pending == nil { keyboard.cancel() }
         refreshVisibility()
@@ -286,9 +295,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSSound.beep()
             return
         }
-        let records = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
         // An explicit app jump uses its most recent window even on another Space.
-        if let window = switchState.order.compactMap({ records[$0] }).first(where: { $0.pid == app.processIdentifier }) {
+        if let window = orderedWindows.first(where: { $0.pid == app.processIdentifier }) {
             activateWindow(window)
         } else {
             app.unhide()
@@ -300,9 +308,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private var availableWindows: [WindowRecord] {
-        let byID = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0) })
-        return switchState.order.compactMap { byID[$0] }.filter {
+    func updateWindowHistory(_ records: [WindowRecord]) {
+        windows = records
+        windowIndices.removeAll(keepingCapacity: true)
+        for index in records.indices { windowIndices[records[index].element] = index }
+        undiscoveredFocus.removeAll { windowIndices[$0] != nil }
+        switchState.reconcile(records.map(\.element) + undiscoveredFocus)
+    }
+
+    func observeFocus(_ element: AXUIElement) {
+        switchState.observe(element)
+        if switchState.pending == nil, currentWindow == nil {
+            // A focus event may beat several scans. Keep its place until the AX
+            // window appears, bounding references to elements that never qualify.
+            undiscoveredFocus.removeAll { $0 == element }
+            undiscoveredFocus.append(element)
+            if undiscoveredFocus.count > 32 { undiscoveredFocus.removeFirst() }
+        }
+    }
+
+    var currentWindow: WindowRecord? {
+        guard let current = switchState.current, let index = windowIndices[current] else { return nil }
+        return windows[index]
+    }
+
+    private var orderedWindows: [WindowRecord] {
+        switchState.order.compactMap { windowIndices[$0] }.map { windows[$0] }
+    }
+
+    var availableWindows: [WindowRecord] {
+        orderedWindows.filter {
             setup.scope.includes(onScreen: $0.onScreen, minimized: $0.minimized, hidden: $0.hidden)
         }
     }
@@ -350,11 +385,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self, self.focusRequest == request, self.switchState.revision == revision,
                       self.switchState.pending == nil,
                       NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
-                if let focused, let record = self.windows.first(where: { $0.pid == pid && CFEqual($0.element, focused) }) {
-                    self.switchState.observe(record.id)
-                } else if focused != nil {
-                    self.switchState.observe(nil)
-                }
+                if let focused { self.observeFocus(focused) }
             }
         }
     }
@@ -362,7 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Menu previews can be dismissed by clicking a target or opening Settings.
         dismiss()
         setupWindow?.orderOut(nil)
-        if step(backwards: false) { keyboard.beginPreview() } else { checkPermissions() }
+        if step(backwards: false, fromMenu: true) { keyboard.beginPreview() } else { checkPermissions() }
     }
     @objc func togglePause(_ sender: NSMenuItem) {
         cancelActivation()
@@ -392,23 +423,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !CommandLine.arguments.contains("--fixture"), panel?.isVisible != true { showSetup() }
         return true
-    }
-
-    private func cachedPreviews(for windows: [WindowRecord]) -> [UUID: NSImage] {
-        let cutoff = Date().addingTimeInterval(-previewCacheLifetime)
-        let titles = Dictionary(uniqueKeysWithValues: windows.map { ($0.id, $0.title) })
-        previewCache = previewCache.filter { id, entry in
-            entry.capturedAt >= cutoff && titles[id] == entry.title
-        }
-        return previewCache.mapValues(\.image)
-    }
-
-    private func trimPreviewCache() {
-        guard previewCache.count > previewCacheLimit else { return }
-        let excess = previewCache.count - previewCacheLimit
-        for id in previewCache.sorted(by: { $0.value.capturedAt < $1.value.capturedAt }).prefix(excess).map(\.key) {
-            previewCache.removeValue(forKey: id)
-        }
     }
 
     private func launchFixture() {

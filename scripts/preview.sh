@@ -8,6 +8,7 @@ mkdir -p "$APP/Contents/MacOS"
 swiftc -swift-version 5 -target "$(uname -m)-apple-macosx13.0" -O \
   Sources/WindowHop/KeyboardTap.swift \
   Sources/WindowHop/NotificationMonitor.swift \
+  Sources/WindowHop/WindowPreviews.swift \
   Sources/WindowHop/WindowCatalog.swift \
   Sources/WindowHop/WindowServerSnapshot.swift \
   Sources/WindowHop/WindowSwitchState.swift \

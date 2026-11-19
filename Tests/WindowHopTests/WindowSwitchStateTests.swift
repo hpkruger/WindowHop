@@ -28,6 +28,20 @@ final class WindowSwitchStateTests: XCTestCase {
         XCTAssertTrue(state.finishActivation(revision: revision, succeeded: true))
     }
 
+    func testRollbackIncludesOnlyTargetsThatActuallyReceivedFocus() {
+        var state = WindowSwitchState<String>()
+        state.reconcile(["Editor", "Older", "Skipped", "Visited"])
+        state.observe("Editor")
+        _ = state.beginActivation("Skipped")
+        let visited = state.beginActivation("Visited")
+        state.observe("Visited")
+        XCTAssertEqual(state.revision, visited)
+        let interrupted = state.beginActivation("Older")
+        XCTAssertTrue(state.finishActivation(revision: interrupted, succeeded: false))
+        XCTAssertEqual(state.current, "Visited")
+        XCTAssertEqual(state.order, ["Visited", "Editor", "Older", "Skipped"])
+    }
+
     func testFailureRestoresConfirmedHistoryAndKeepsNewWindows() {
         var state = WindowSwitchState<String>()
         state.reconcile(["A", "B", "C"])

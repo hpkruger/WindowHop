@@ -12,8 +12,8 @@ struct WindowServerEntry {
 struct WindowServerSnapshot {
     var entries: [WindowServerEntry]
 
-    static func capture() -> Self {
-        let list = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    static func capture(onScreenOnly: Bool = false) -> Self {
+        let list = CGWindowListCopyWindowInfo([onScreenOnly ? .optionOnScreenOnly : .optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         return Self(entries: list.compactMap { info in
             guard let number = info[kCGWindowNumber as String] as? NSNumber,
                   let pid = info[kCGWindowOwnerPID as String] as? NSNumber,

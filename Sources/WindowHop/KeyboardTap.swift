@@ -15,7 +15,8 @@ enum SwitcherShortcut: String, CaseIterable {
 final class KeyboardTap {
     private var tap: CFMachPort?
     private var source: CFRunLoopSource?
-    private var gesture = false
+    private enum Gesture { case idle, menu, shortcut }
+    private var gesture = Gesture.idle
     private var swallowedKeys = Set<Int64>()
     var shortcut: SwitcherShortcut = .option { didSet { if oldValue != shortcut { cancel() } } }
     var onStep: ((Bool) -> Bool)?
@@ -51,9 +52,9 @@ final class KeyboardTap {
         tap = nil; source = nil; swallowedKeys.removeAll()
     }
 
-    func cancel() { gesture = false; onCancel?() }
-    func beginPreview() { gesture = true }
-    func endGesture() { gesture = false }
+    func cancel() { gesture = .idle; onCancel?() }
+    func beginPreview() { gesture = .menu }
+    func endGesture() { gesture = .idle }
 
     func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -64,12 +65,12 @@ final class KeyboardTap {
         }
         let key = event.getIntegerValueField(.keyboardEventKeycode)
         let modifierHeld = event.flags.contains(shortcut.modifier)
-        if gesture, type == .leftMouseDown || type == .rightMouseDown {
+        if gesture != .idle, type == .leftMouseDown || type == .rightMouseDown {
             if pointerIsInside?(event.location) != true { cancel() }
         }
         if type == .keyUp, swallowedKeys.remove(key) != nil { return nil }
-        if type == .flagsChanged, gesture, !modifierHeld {
-            gesture = false
+        if type == .flagsChanged, gesture == .shortcut, !modifierHeld {
+            gesture = .idle
             onCommit?()
         }
         if type == .keyDown {
@@ -84,19 +85,19 @@ final class KeyboardTap {
             }
             if key == 48, modifierHeld, !event.flags.contains(shortcut.excludedModifier), !event.flags.contains(.maskControl) {
                 if onStep?(event.flags.contains(.maskShift)) == true {
-                    gesture = true; swallowedKeys.insert(key); return nil
+                    gesture = .shortcut; swallowedKeys.insert(key); return nil
                 }
             }
-            if gesture, key == 53 { cancel(); swallowedKeys.insert(key); return nil }
-            if gesture, key == 36 {
-                gesture = false; onCommit?(); swallowedKeys.insert(key); return nil
+            if gesture != .idle, key == 53 { cancel(); swallowedKeys.insert(key); return nil }
+            if gesture != .idle, key == 36 {
+                gesture = .idle; onCommit?(); swallowedKeys.insert(key); return nil
             }
-            if gesture, [123, 124, 125, 126].contains(key) {
+            if gesture != .idle, [123, 124, 125, 126].contains(key) {
                 _ = onStep?(key == 123 || key == 126)
                 swallowedKeys.insert(key); return nil
             }
             // Typing elsewhere dismisses the picker and reaches the intended app.
-            if gesture { cancel() }
+            if gesture != .idle { cancel() }
         }
         if type == .keyDown || type == .leftMouseDown || type == .rightMouseDown { onExternalInteraction?() }
         return Unmanaged.passUnretained(event)

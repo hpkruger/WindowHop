@@ -24,7 +24,7 @@ final class PreviewDelegate: NSObject, NSApplicationDelegate {
                 appName: app, title: title, minimized: minimized, hidden: false, icon: icon, lastUsed: 0)
         }
         model.previews = Dictionary(uniqueKeysWithValues: model.windows.enumerated().map { index, window in
-            (window.id, samplePreview(index: index, appName: window.appName, title: window.title))
+            (window.id, .image(samplePreview(index: index, appName: window.appName, title: window.title)))
         })
         model.shortcut = .command
         model.selected = model.windows[1].id

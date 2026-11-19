@@ -3,6 +3,37 @@ import XCTest
 @testable import WindowHop
 
 final class WindowCatalogTests: XCTestCase {
+    func testMissingWindowSubroleDefersRemovalOfKnownWindow() {
+        XCTAssertNil(WindowCatalog.isSwitchableWindow(role: kAXWindowRole, subrole: ""))
+        XCTAssertEqual(WindowCatalog.isSwitchableWindow(role: kAXWindowRole, subrole: kAXFloatingWindowSubrole), false)
+        XCTAssertEqual(WindowCatalog.isSwitchableWindow(role: kAXWindowRole, subrole: kAXDialogSubrole), true)
+    }
+
+    func testWindowVisitedBeforeDiscoveryIsTheNextCommandTabTarget() {
+        let delegate = AppDelegate()
+        func record(_ title: String, _ pid: pid_t) -> WindowRecord {
+            WindowRecord(id: UUID(), pid: pid, element: AXUIElementCreateApplication(pid),
+                         appName: "Fixture", title: title, minimized: false, hidden: false,
+                         icon: nil, lastUsed: 0)
+        }
+        let editor = record("editor", 101)
+        let older = record("older", 102)
+        let newWindow = record("new window", 103)
+        delegate.updateWindowHistory([editor, older])
+        delegate.observeFocus(editor.element)
+        // AX can return distinct references to the same underlying element.
+        delegate.observeFocus(AXUIElementCreateApplication(newWindow.pid))
+        delegate.updateWindowHistory([editor, older])
+        XCTAssertNil(delegate.currentWindow)
+        XCTAssertEqual(delegate.availableWindows.map(\.id), [editor.id, older.id])
+        delegate.observeFocus(editor.element)
+        delegate.updateWindowHistory([editor, newWindow, older])
+
+        let session = SwitchSession(ids: delegate.availableWindows.map(\.id),
+                                    current: delegate.currentWindow?.id, backwards: false)
+        XCTAssertEqual(delegate.availableWindows.first { $0.id == session.selected }?.title, "new window")
+    }
+
     func testDetachedTabReturnsToOriginalWindowBeforeDiscoveryCompletes() {
         let catalog = WindowCatalog()
         let pid: pid_t = 123

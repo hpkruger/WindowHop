@@ -17,7 +17,8 @@ final class SwitcherModel: ObservableObject {
     @Published var windows: [WindowRecord] = []
     @Published var selected: UUID?
     @Published var shortcut: SwitcherShortcut = .option
-    @Published var previews: [UUID: NSImage] = [:]
+    @Published var previews: [UUID: WindowPreview] = [:]
+    @Published var openedFromMenu = false
     @Published var showPreviews = WindowPreviewPreference.load()
     var choose: ((UUID) -> Void)?
 }
@@ -63,7 +64,7 @@ struct SwitcherView: View {
                 if model.showPreviews {
                     Text("Previews on").foregroundStyle(.secondary)
                 }
-                Text("Release \(model.shortcut.symbol) to switch").foregroundStyle(.primary)
+                Text(model.openedFromMenu ? "Return to switch" : "Release \(model.shortcut.symbol) to switch").foregroundStyle(.primary)
             }.font(.system(size: 11)).foregroundStyle(.secondary).padding(.horizontal, 6)
         }
         .padding(20)
@@ -76,7 +77,7 @@ struct SwitcherView: View {
 
 private struct WindowCard: View {
     let window: WindowRecord
-    let preview: NSImage?
+    let preview: WindowPreview?
     let selected: Bool
     let showPreview: Bool
 
@@ -84,15 +85,17 @@ private struct WindowCard: View {
         VStack(alignment: .leading, spacing: 8) {
             if showPreview {
                 ZStack(alignment: .bottomLeading) {
-                    if let preview {
-                        Image(nsImage: preview)
+                    if case let .image(image) = preview {
+                        Image(nsImage: image)
                             .resizable().aspectRatio(contentMode: .fill)
                     } else {
                         VStack(spacing: 5) {
-                            Image(systemName: window.minimized || window.hidden ? "eye.slash" : "rectangle.on.rectangle")
-                                .font(.system(size: 24)).foregroundStyle(.secondary)
-                            Text(window.minimized || window.hidden ? "No live preview" : "Preview unavailable")
-                                .font(.system(size: 10)).foregroundStyle(.secondary)
+                            appIcon
+                            if window.minimized || window.hidden {
+                                Text("No live preview").font(.system(size: 10)).foregroundStyle(.secondary)
+                            } else if case .unavailable = preview {
+                                Text("Preview unavailable").font(.system(size: 10)).foregroundStyle(.secondary)
+                            }
                         }.frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                     if window.minimized || window.hidden {

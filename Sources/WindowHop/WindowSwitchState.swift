@@ -19,7 +19,16 @@ struct WindowSwitchState<ID: Hashable> {
     }
 
     mutating func observe(_ id: ID?) {
-        guard pending == nil, id != current else { return }
+        if let pending {
+            // A click can cancel verification after the target has already taken focus.
+            if id == pending, confirmedCurrent != pending {
+                confirmedOrder?.removeAll { $0 == pending }
+                confirmedOrder?.insert(pending, at: 0)
+                confirmedCurrent = pending
+            }
+            return
+        }
+        guard id != current else { return }
         current = id
         if let id { promote(id) }
         revision &+= 1

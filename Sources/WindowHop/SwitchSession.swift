@@ -3,11 +3,13 @@ import Foundation
 /// Freeze ordering for the duration of a gesture; focus changes must not move its targets.
 struct SwitchSession<ID: Equatable> {
     let ids: [ID]
+    var frontmostPID: pid_t?
     private(set) var index: Int
     var selected: ID? { ids.isEmpty ? nil : ids[index] }
 
-    init(ids: [ID], current: ID?, backwards: Bool) {
+    init(ids: [ID], current: ID?, backwards: Bool, frontmostPID: pid_t? = nil) {
         self.ids = ids
+        self.frontmostPID = frontmostPID
         index = current.flatMap { ids.firstIndex(of: $0) } ?? (backwards ? 0 : -1)
         step(backwards: backwards)
     }

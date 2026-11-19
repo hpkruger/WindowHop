@@ -12,7 +12,11 @@ struct SystemWindowActivationDriver: WindowActivationDriver {
     func prepare(_ record: WindowRecord) -> String? {
         AXUIElementSetMessagingTimeout(record.element, 0.06)
         guard NSRunningApplication(processIdentifier: record.pid)?.isTerminated == false else { return "That app has closed." }
-        if axValue(record.element, kAXMinimizedAttribute) == true {
+        // The window may have closed since the last catalog scan while its app is still running.
+        var minimized: CFTypeRef?
+        let read = AXUIElementCopyAttributeValue(record.element, kAXMinimizedAttribute as CFString, &minimized)
+        if read == .invalidUIElement { return "That window has closed." }
+        if minimized as? Bool == true {
             let result = AXUIElementSetAttributeValue(record.element, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
             guard result == .success else { return "macOS could not restore this window (\(result.rawValue))." }
         }

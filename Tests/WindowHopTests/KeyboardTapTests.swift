@@ -63,6 +63,28 @@ final class KeyboardTapTests: XCTestCase {
         }
     }
 
+    func testMenuPickerOnlyCommitsOnReturnOrAfterARealShortcut() {
+        for shortcut in SwitcherShortcut.allCases {
+            let tap = KeyboardTap()
+            tap.shortcut = shortcut
+            var commits = 0
+            tap.onCommit = { commits += 1 }
+            tap.onStep = { _ in true }
+            tap.beginPreview()
+            for flags: CGEventFlags in [.maskShift, [], shortcut.modifier, []] {
+                _ = tap.handle(.flagsChanged, event(flags: flags))
+            }
+            XCTAssertEqual(commits, 0)
+            XCTAssertTrue(tap.handle(.keyDown, event(36, flags: [])) == nil)
+            XCTAssertEqual(commits, 1)
+
+            tap.beginPreview()
+            XCTAssertTrue(tap.handle(.keyDown, event(flags: shortcut.modifier)) == nil)
+            _ = tap.handle(.flagsChanged, event(flags: []))
+            XCTAssertEqual(commits, 2)
+        }
+    }
+
     func testChangingShortcutCancelsGestureWithoutActivating() {
         let tap = KeyboardTap()
         var commits = 0
